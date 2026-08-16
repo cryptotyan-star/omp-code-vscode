@@ -1,0 +1,145 @@
+{
+  "name": "omp-code",
+  "displayName": "OMP Code",
+  "description": "Claude Code-style chat GUI in the sidebar, backed by the omp (oh-my-pi) CLI over RPC. Supports custom model providers and the Anthropic Cloud API.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:ompcode.chat"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ompcode",
+          "title": "OMP Code",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ompcode": [
+        {
+          "type": "webview",
+          "id": "ompcode.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ompcode.newSession",
+        "title": "OMP Code: New Chat Tab",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ompcode.setAnthropicKey",
+        "title": "OMP Code: Set Anthropic API Key"
+      },
+      {
+        "command": "ompcode.setKimiKey",
+        "title": "OMP Code: Set Kimi (Moonshot) API Key"
+      },
+      {
+        "command": "ompcode.loginClaude",
+        "title": "OMP Code: Sign in with Claude (Subscription)"
+      },
+      {
+        "command": "ompcode.loginKimi",
+        "title": "OMP Code: Sign in with Kimi Code (Subscription)"
+      },
+      {
+        "command": "ompcode.openModelsConfig",
+        "title": "OMP Code: Open models.yml (Custom Providers)"
+      },
+      {
+        "command": "ompcode.restart",
+        "title": "OMP Code: Restart Agent"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ompcode.newSession",
+          "when": "view == ompcode.chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OMP Code",
+      "properties": {
+        "ompcode.ompPath": {
+          "type": "string",
+          "default": "omp",
+          "description": "Path to the omp CLI binary (oh-my-pi). Defaults to `omp` resolved via PATH (~/.bun/bin is added automatically)."
+        },
+        "ompcode.customProviders": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Custom model providers, same shape as the `providers:` map in `~/.omp/agent/models.yml`. Merged into models.yml before each agent start. Example: `{\"akemi\": {\"baseUrl\": \"http://host:8000/v1\", \"api\": \"openai-completions\", \"apiKey\": \"sk-...\", \"models\": [{\"id\": \"akemi-1\", \"name\": \"Akemi\", \"contextWindow\": 128000, \"maxTokens\": 32000}]}}`"
+        },
+        "ompcode.defaultModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model to select after the agent starts, as `provider/modelId` (fuzzy matched), e.g. `akemi/akemi-1` or `anthropic/claude-sonnet-4-5`. Empty = keep the agent's default."
+        },
+        "ompcode.thinkingLevel": {
+          "type": "string",
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Thinking (reasoning) level applied after the agent starts."
+        },
+        "ompcode.approvalMode": {
+          "type": "string",
+          "enum": [
+            "always-ask",
+            "write",
+            "yolo"
+          ],
+          "default": "always-ask",
+          "enumDescriptions": [
+            "Ask before every tool execution.",
+            "Auto-approve reads; ask before writes and commands.",
+            "Auto-approve everything (dangerous)."
+          ],
+          "description": "Tool approval mode passed to omp as --approval-mode."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.mjs",
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "yaml": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.4.5"
+  }
+}

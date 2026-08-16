@@ -1,0 +1,16 @@
+.vscode/**
+.vscode-test/**
+.gitignore
+.git/**
+src/**
+node_modules/**
+esbuild.mjs
+tsconfig.json
+SPEC.md
+**/*.map
+**/*.ts
+*.vsix
+bun.lockb
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
