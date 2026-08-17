@@ -25,11 +25,23 @@ Claude Code-style chat in the VS Code sidebar, powered by the [`omp`](https://ww
    code --install-extension omp-code-0.1.0.vsix
    ```
 
-## Anthropic API key / Ключ Anthropic
+## Sign in / Вход
 
-Run the command **OMP Code: Set Anthropic API Key** from the Command Palette (`Cmd+Shift+P`). The key is stored in VS Code Secret Storage and passed to `omp` as `ANTHROPIC_API_KEY`.
+Two ways to authenticate / два способа аутентификации:
 
-Выполните команду **OMP Code: Set Anthropic API Key** из палитры команд (`Cmd+Shift+P`). Ключ хранится в Secret Storage VS Code и передаётся `omp` как `ANTHROPIC_API_KEY`.
+1. **Subscription (Claude Pro/Max or Kimi Code)** — run **OMP Code: Sign in with Claude (Subscription)** or **OMP Code: Sign in with Kimi Code (Subscription)** from the Command Palette. A browser opens for OAuth; the agent restarts when login completes.
+
+2. **API keys** — stored in VS Code Secret Storage, never written to plaintext config:
+   - **OMP Code: Set Anthropic API Key** → passed to `omp` as `ANTHROPIC_API_KEY`.
+   - **OMP Code: Set Kimi (Moonshot) API Key** → passed as `MOONSHOT_API_KEY`.
+   - **OMP Code: Set Custom Provider API Key** → injects an `apiKey` into a `customProviders` entry at agent start (the settings.json value is used as a fallback).
+
+1. **Подписка (Claude Pro/Max или Kimi Code)** — выполните **OMP Code: Sign in with Claude (Subscription)** или **OMP Code: Sign in with Kimi Code (Subscription)** из палитры команд. Откроется браузер для OAuth; после входа агент перезапустится.
+
+2. **API-ключи** — хранятся в Secret Storage VS Code, не попадают в конфиг в открытом виде:
+   - **OMP Code: Set Anthropic API Key** → передаётся `omp` как `ANTHROPIC_API_KEY`.
+   - **OMP Code: Set Kimi (Moonshot) API Key** → передаётся как `MOONSHOT_API_KEY`.
+   - **OMP Code: Set Custom Provider API Key** → вливает `apiKey` в запись `customProviders` при старте агента (значение из settings.json используется как fallback).
 
 ## Custom providers / Кастомные провайдеры
 
@@ -69,14 +81,40 @@ You can also edit `models.yml` directly: **OMP Code: Open models.yml (Custom Pro
 - Type `/` to see the agent's slash commands.
 - The chips under the input switch the **model** and the **thinking level**; the context chip shows context usage.
 - Tool calls (Bash, file edits, etc.) render as collapsible cards; approval requests appear as **Allow / Deny** dialogs (see `ompcode.approvalMode`).
+- **Attach files** three ways: the 📎 button in the composer, `Ctrl/Cmd+V` with a file on the clipboard, or dragging files onto the panel **while holding Shift** (VS Code only forwards a drop into a webview with Shift held). Attachments show as chips above the input and are sent to the agent as absolute paths, so nothing is pasted into the context window. Files without a path of their own (clipboard screenshots, Finder drags) are copied into the extension's storage first; anything above 20 MB is rejected.
+- The palette is set by `ompcode.theme` (violet, coral, emerald, amber, magenta) and can be overridden with any CSS color via `ompcode.accentColor`. Both apply instantly, without restarting the agent.
 - Commands: **New Chat Tab**, **Restart Agent** (restarts every open session; the agent also restarts automatically when any `ompcode.*` setting changes).
+- **Editor → chat**: select code and run **OMP Code: Add Selection to Chat** (editor context menu, `Ctrl/Cmd+Alt+L`) — the selection lands as a chip (`file.ts:10-25`) and is inlined into the prompt with its line range. A ghost chip in the composer always shows the active editor file.
+- **@-mentions**: type `@` in the composer to autocomplete workspace files; picking one attaches it as a chip with a validated absolute path.
+- **Keyboard shortcuts**: `Ctrl/Cmd+Alt+O` open chat, `Ctrl/Cmd+Alt+N` new chat tab, `Ctrl/Cmd+Alt+L` add selection to chat. `↑` at the start of an empty composer recalls previously sent prompts (shell-style).
+- **Edit feedback loop**: after an edit/write tool runs, its card gets a **diff** button (before ↔ current, via `vscode.diff`), and new language-server diagnostics surface as a warning notice.
+- **Code blocks** carry two buttons: **copy** and **insert** (at the editor cursor).
+- **Status bar** shows the current model and context fill; click opens the chat. After each run a chip shows session tokens/cost (`↑in ↓out $cost`).
+- **Crash recovery**: a crashed agent is auto-restarted once after 1 s; the manual Restart banner appears only if that fails (missing keys/models skip auto-restart and show the setup card).
+- **Multi-root workspaces**: opening a new chat tab asks which folder its agent should work in (per-tab cwd).
+- **Export**: ⚙ → **Export transcript as Markdown** saves the conversation via `get_messages`.
+- **Notifications**: a turn that ran over 15 s while VS Code was unfocused ends with a native notification.
+- **History**: the history panel has a filter box matching title, preview, folder and model.
 
 - Нажмите значок ✳ **OMP Code** в панели активности и введите запрос. `Enter` — отправить, `Shift+Enter` — перенос строки, `Esc` — прервать выполнение.
 - Кнопка **＋** (в чате или в заголовке панели) открывает новый чат **вкладкой в редакторе** — у каждой вкладки своя независимая сессия агента; закрытие вкладки останавливает её процесс. В меню ⚙ — вход через подписку, API-ключи, compact, рестарт и «Clear this session».
 - Введите `/`, чтобы увидеть slash-команды агента.
 - Чипы под полем ввода переключают **модель** и **уровень размышлений**; чип контекста показывает заполненность контекста.
 - Вызовы инструментов (Bash, правки файлов и т.д.) отображаются сворачиваемыми карточками; запросы на подтверждение — диалогами **Allow / Deny** (см. `ompcode.approvalMode`).
+- **Вложения** — тремя способами: кнопка 📎 в поле ввода, `Ctrl/Cmd+V` с файлом в буфере обмена или перетаскивание файлов в панель **с зажатым Shift** (VS Code пробрасывает drop в webview только с Shift). Вложения показываются чипами над полем ввода и передаются агенту абсолютными путями — содержимое не вставляется в контекст. Файлы без собственного пути (скриншот из буфера, перетаскивание из Finder) сначала копируются в хранилище расширения; больше 20 МБ — отклоняются.
+- Цветовая гамма задаётся настройкой `ompcode.theme` (violet, coral, emerald, amber, magenta), свой цвет — `ompcode.accentColor`. Применяется сразу, без перезапуска агента.
 - Команды: **New Chat Tab**, **Restart Agent** (перезапускает все открытые сессии; агент также перезапускается автоматически при изменении любой настройки `ompcode.*`).
+- **Редактор → чат**: выделите код и выполните **OMP Code: Add Selection to Chat** (контекстное меню редактора, `Ctrl/Cmd+Alt+L`) — выделение станет чипом (`file.ts:10-25`) и попадёт в промпт с диапазоном строк. Призрачный чип в композере всегда показывает активный файл.
+- **@-упоминания**: введите `@` в композере — автодополнение файлов workspace; выбор прикрепляет файл чипом с проверенным абсолютным путём.
+- **Горячие клавиши**: `Ctrl/Cmd+Alt+O` открыть чат, `Ctrl/Cmd+Alt+N` новая вкладка, `Ctrl/Cmd+Alt+L` выделение в чат. `↑` в начале пустого поля листает отправленные промпты.
+- **Фидбек правок**: после edit/write-инструмента на карточке появляется кнопка **diff** (до ↔ после через `vscode.diff`), а новые диагностики языкового сервера показываются предупреждением.
+- **Блоки кода** имеют кнопки **copy** и **insert** (в позицию курсора редактора).
+- **Статус-бар** показывает модель и заполнение контекста; клик открывает чат. После каждого прогона чип показывает токены/стоимость сессии (`↑in ↓out $cost`).
+- **Восстановление после сбоя**: упавший агент перезапускается автоматически один раз через 1 с; баннер с ручным Restart — только если не помогло (при отсутствии ключей/моделей авто-рестарт пропускается).
+- **Multi-root**: при открытии новой вкладки чата спрашивает, в какой папке работать её агенту (cwd на вкладку).
+- **Экспорт**: ⚙ → **Export transcript as Markdown** сохраняет диалог через `get_messages`.
+- **Уведомления**: ход длиннее 15 с при нефокусированном окне завершается нативным уведомлением.
+- **История**: в панели истории есть фильтр по названию, превью, папке и модели.
 
 ## Settings / Настройки
 
@@ -87,3 +125,6 @@ You can also edit `models.yml` directly: **OMP Code: Open models.yml (Custom Pro
 | `ompcode.defaultModel` | `""` | `provider/modelId` selected on start / модель по умолчанию |
 | `ompcode.thinkingLevel` | `auto` | off…max, auto / уровень размышлений |
 | `ompcode.approvalMode` | `always-ask` | `always-ask` \| `write` \| `yolo` |
+| `ompcode.theme` | `violet` | Accent palette / цветовая гамма: violet, coral, emerald, amber, magenta |
+| `ompcode.accentColor` | `""` | Custom accent CSS color / свой цвет акцента, например `#8B7BF7` |
+| `ompcode.resumeLastSession` | `false` | New chats resume the most recent session / новые чаты продолжают последнюю сессию |

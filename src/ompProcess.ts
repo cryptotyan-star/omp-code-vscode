@@ -16,6 +16,8 @@ export interface OmpStartOptions {
   env: NodeJS.ProcessEnv;
   /** ompcode.approvalMode — passed as --approval-mode when not "always-ask". */
   approvalMode: string;
+  /** Extra CLI flags appended verbatim (used by the model prober). */
+  extraArgs?: string[];
 }
 
 interface PendingRequest {
@@ -28,9 +30,11 @@ interface PendingRequest {
 interface ChunkBuffer {
   count: number;
   parts: Map<number, string>;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
-
 const REQUEST_TIMEOUT_MS = 60_000;
+/** A chunk set that doesn't fully arrive within this window is dropped. */
+const CHUNK_TIMEOUT_MS = 30_000;
 
 /**
  * Manages one `omp --mode rpc-ui` child process: NDJSON framing over stdio,
@@ -48,7 +52,7 @@ export class OmpProcess {
   private readonly exitHandlers: Array<
     (code: number | null, signal: NodeJS.Signals | null) => void
   > = [];
-  private readonly errorHandlers: Array<(err: Error) => void> = [];
+  private readonly errorHandlers: Array<(err: NodeJS.ErrnoException) => void> = [];
 
   /** True while the child process is alive and stop() has not been called. */
   get running(): boolean {
@@ -76,7 +80,7 @@ export class OmpProcess {
   }
 
   /** Register a callback for spawn/process errors (e.g. ENOENT). */
-  onError(cb: (err: Error) => void): void {
+  onError(cb: (err: NodeJS.ErrnoException) => void): void {
     this.errorHandlers.push(cb);
   }
 
@@ -92,6 +96,9 @@ export class OmpProcess {
     const args = ["--mode", "rpc-ui", "--cwd", opts.cwd];
     if (opts.approvalMode && opts.approvalMode !== "always-ask") {
       args.push("--approval-mode", opts.approvalMode);
+    }
+    if (opts.extraArgs?.length) {
+      args.push(...opts.extraArgs);
     }
 
     const proc = spawn(opts.ompPath, args, {
@@ -119,7 +126,7 @@ export class OmpProcess {
       /* noop */
     });
 
-    proc.on("error", (err: Error) => {
+    proc.on("error", (err: NodeJS.ErrnoException) => {
       this.failAllPending(new Error(`omp process error: ${err.message}`));
       for (const cb of this.errorHandlers) {
         cb(err);
@@ -133,7 +140,7 @@ export class OmpProcess {
         ),
       );
       this.stdoutBuffer = "";
-      this.chunks.clear();
+      this.clearChunks();
       for (const cb of this.exitHandlers) {
         cb(code, signal);
       }
@@ -181,7 +188,7 @@ export class OmpProcess {
     this.stopped = true;
     this.failAllPending(new Error("omp process stopped"));
     this.stdoutBuffer = "";
-    this.chunks.clear();
+    this.clearChunks();
     const proc = this.proc;
     if (proc && proc.exitCode === null && proc.signalCode === null) {
       try {
@@ -273,20 +280,28 @@ export class OmpProcess {
     }
     let buf = this.chunks.get(chunkId);
     if (!buf) {
-      buf = { count, parts: new Map<number, string>() };
+      buf = {
+        count,
+        parts: new Map<number, string>(),
+        timer: setTimeout(() => {
+          this.chunks.delete(chunkId);
+        }, CHUNK_TIMEOUT_MS),
+      };
       this.chunks.set(chunkId, buf);
     }
     buf.parts.set(index, data);
     if (buf.parts.size < buf.count) {
       return;
     }
+    clearTimeout(buf.timer);
+    buf.timer = undefined;
     this.chunks.delete(chunkId);
-    // Chunk payloads are base64 slices of the original UTF-8 frame bytes.
-    const parts: Buffer[] = [];
+    // Concatenate the raw string slices in index order, then JSON.parse.
+    // (Spec: "concat data of all parts in index order, then JSON.parse".)
+    let joined = "";
     for (let i = 0; i < buf.count; i++) {
-      parts.push(Buffer.from(buf.parts.get(i) ?? "", "base64"));
+      joined += buf.parts.get(i) ?? "";
     }
-    const joined = Buffer.concat(parts).toString("utf8");
     let inner: unknown;
     try {
       inner = JSON.parse(joined);
@@ -300,11 +315,17 @@ export class OmpProcess {
 
   private failAllPending(err: Error): void {
     for (const req of this.pending.values()) {
-      if (req.timer !== undefined) {
-        clearTimeout(req.timer);
-      }
+      clearTimeout(req.timer);
       req.reject(err);
     }
     this.pending.clear();
+  }
+
+  /** Drop all in-flight chunk buffers and clear their TTL timers. */
+  private clearChunks(): void {
+    for (const buf of this.chunks.values()) {
+      clearTimeout(buf.timer);
+    }
+    this.chunks.clear();
   }
 }

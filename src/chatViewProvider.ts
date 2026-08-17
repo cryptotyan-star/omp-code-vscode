@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { OmpSession } from "./ompSession";
+import type { Attachment } from "./attachments";
+import { OmpSession, type DiffStore } from "./ompSession";
 
 export { ANTHROPIC_KEY_SECRET, MOONSHOT_KEY_SECRET } from "./ompSession";
 
@@ -16,8 +17,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private readonly context: vscode.ExtensionContext,
     output: vscode.OutputChannel,
     openNewTab: () => void,
+    onState?: (state: unknown) => void,
+    diffStore?: DiffStore,
   ) {
-    this.session = new OmpSession(context, output, { onOpenNewTab: openNewTab });
+    this.session = new OmpSession(context, output, {
+      onOpenNewTab: openNewTab,
+      onState,
+      onReveal: () => void vscode.commands.executeCommand("ompcode.chat.focus"),
+    }, diffStore);
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -38,6 +45,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   restart(): Promise<void> {
     return this.session.restart();
+  }
+
+  showHistory(): void {
+    this.session.showHistory();
+  }
+
+  /** Forward an editor selection to the sidebar chat's composer. */
+  attachContext(attachment: Attachment): void {
+    this.session.attachContext(attachment);
   }
 
   dispose(): void {

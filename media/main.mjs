@@ -1,52 +1,16 @@
-/* OMP Code — webview UI (vanilla JS, no imports). Runs under a nonce'd script tag. */
-(function () {
-  "use strict";
+/* OMP Code — webview UI. ESM module; runs under a nonce'd script tag. */
+
+  // markdown.mjs is a module: its exports are NOT globals. Without this import
+  // every renderAssistant() call threw ReferenceError, which the host-message
+  // try/catch swallowed — assistant replies silently never rendered.
+  import { renderMarkdown } from "./markdown.mjs";
 
   var vscode = acquireVsCodeApi();
-
   function post(msg) {
     try { vscode.postMessage(msg); } catch (e) { /* host gone */ }
   }
 
-  /* ------------------------------------------------------------------ */
-  /* Static skeleton                                                     */
-  /* ------------------------------------------------------------------ */
-
-  document.body.innerHTML =
-    '<div id="app">' +
-      '<header class="topbar">' +
-        '<div class="topbar-title"><span class="spark">✳</span><span id="session-title">OMP Code</span></div>' +
-        '<div class="topbar-actions">' +
-          '<button id="btn-new" class="icon-btn" title="New chat tab">＋</button>' +
-          '<button id="btn-settings" class="icon-btn" title="Settings">⚙</button>' +
-        '</div>' +
-      '</header>' +
-      '<main id="messages">' +
-        '<div class="welcome"><div class="welcome-spark">✳</div>' +
-          '<h1>What can I help you build?</h1>' +
-          '<p class="welcome-sub">Ask questions, run commands, edit files. Type <code>/</code> for commands. Shift+Enter for a new line, Esc to interrupt.</p>' +
-        '</div>' +
-        '<div id="working" class="status-line hidden"><span class="spark spin">✳</span> <span id="working-text">Working…</span> <span class="dim">esc to interrupt</span></div>' +
-      '</main>' +
-      '<div id="modal-holder"></div>' +
-      '<footer class="composer">' +
-        '<div class="composer-box">' +
-          '<div id="slash-popup" class="slash-popup hidden"></div>' +
-          '<textarea id="input" rows="1" placeholder="Ask OMP Code…"></textarea>' +
-          '<div class="composer-row">' +
-            '<button id="model-chip" class="chip">model</button>' +
-            '<button id="thinking-chip" class="chip">think: auto</button>' +
-            '<span id="ctx-chip" class="chip ghost hidden"></span>' +
-            '<span class="flex-spacer"></span>' +
-            '<button id="btn-send" class="send-btn" title="Send">↑</button>' +
-            '<button id="btn-stop" class="send-btn stop hidden" title="Stop">■</button>' +
-          '</div>' +
-        '</div>' +
-        '<div id="proc-banner" class="proc-banner hidden"><span id="proc-text">Agent is not running.</span> <button id="btn-restart">Restart</button></div>' +
-      '</footer>' +
-      '<div id="menu-holder"></div>' +
-      '<div id="toast-holder"></div>' +
-    '</div>';
+  /* Static skeleton lives in the host-provided HTML (ompSession.getHtml). */
 
   var messagesEl = document.getElementById("messages");
   var welcomeEl = messagesEl.querySelector(".welcome");
@@ -57,17 +21,24 @@
   var toastHolder = document.getElementById("toast-holder");
   var input = document.getElementById("input");
   var slashPopup = document.getElementById("slash-popup");
+  var atPopup = document.getElementById("at-popup");
   var modelChip = document.getElementById("model-chip");
   var thinkingChip = document.getElementById("thinking-chip");
   var ctxChip = document.getElementById("ctx-chip");
   var btnSend = document.getElementById("btn-send");
   var btnStop = document.getElementById("btn-stop");
+  var btnHistory = document.getElementById("btn-history");
   var btnNew = document.getElementById("btn-new");
   var btnSettings = document.getElementById("btn-settings");
   var btnRestart = document.getElementById("btn-restart");
+  var btnAttach = document.getElementById("btn-attach");
+  var attachmentsEl = document.getElementById("attachments");
+  var dropOverlay = document.getElementById("drop-overlay");
   var procBanner = document.getElementById("proc-banner");
   var procText = document.getElementById("proc-text");
   var sessionTitle = document.getElementById("session-title");
+  var fileChip = document.getElementById("file-chip");
+  var statsChip = document.getElementById("stats-chip");
 
   /* ------------------------------------------------------------------ */
   /* State                                                               */
@@ -86,6 +57,11 @@
   var pendingLocalUser = 0;      // user bubbles rendered locally, skip echoes
   var retryNotice = null;
   var compactNotice = null;
+  // Attachments staged for the next prompt: { path, name, size } once the host
+  // confirms them, or { token, name, pending:true } while bytes are in flight.
+  var attachments = [];
+  var attachSeq = 0;
+  var dragDepth = 0;
 
   var modalQueue = [];
   var activeModal = null;        // { frame, el }
@@ -95,6 +71,11 @@
 
   var slashItems = [];
   var slashSel = 0;
+
+  // Sent prompts, newest last; ↑ in the composer walks them like a shell.
+  var promptHistory = [];
+  var historyIdx = -1;      // -1 = editing, not browsing
+  var historyDraft = "";
 
   /* ------------------------------------------------------------------ */
   /* Small helpers                                                       */
@@ -166,126 +147,32 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* Mini markdown renderer                                              */
-  /* ------------------------------------------------------------------ */
-
-  var TOK = String.fromCharCode(1); // sentinel for protected inline tokens
-  var TOK_RE = new RegExp(TOK + "(\\d+)" + TOK, "g");
-
-  function renderInline(raw) {
-    var toks = [];
-    var s = esc(raw);
-    // protect inline code from further formatting
-    s = s.replace(/`([^`\n]+)`/g, function (_, c) {
-      toks.push("<code>" + c + "</code>");
-      return TOK + (toks.length - 1) + TOK;
-    });
-    // links [text](url) — only http(s); clicks are delegated to openExternal
-    s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, function (m, t, u) {
-      if (!/^https?:\/\//i.test(u)) return m;
-      toks.push('<a href="#" data-href="' + u + '">' + t + "</a>");
-      return TOK + (toks.length - 1) + TOK;
-    });
-    s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/(^|[\s(])\*([^*\s][^*\n]*)\*/g, "$1<em>$2</em>");
-    s = s.replace(TOK_RE, function (_, i) { return toks[+i]; });
-    return s;
-  }
-
-  function renderBlocks(text) {
-    var lines = String(text).split("\n");
-    var html = [];
-    var para = [];
-    var quote = [];
-    var list = null; // { type: "ul"|"ol", items: [] }
-
-    function flushPara() {
-      if (para.length) { html.push("<p>" + para.map(renderInline).join("<br>") + "</p>"); para = []; }
-    }
-    function flushList() {
-      if (list) {
-        html.push("<" + list.type + ">" + list.items.map(function (i) {
-          return "<li>" + renderInline(i) + "</li>";
-        }).join("") + "</" + list.type + ">");
-        list = null;
-      }
-    }
-    function flushQuote() {
-      if (quote.length) { html.push("<blockquote>" + quote.map(renderInline).join("<br>") + "</blockquote>"); quote = []; }
-    }
-    function flushAll() { flushPara(); flushList(); flushQuote(); }
-
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      var m;
-      if (!line.trim()) { flushAll(); continue; }
-      if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) {
-        flushAll();
-        var lvl = m[1].length;
-        html.push("<h" + lvl + ">" + renderInline(m[2]) + "</h" + lvl + ">");
-        continue;
-      }
-      if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flushAll(); html.push("<hr>"); continue; }
-      if ((m = /^>\s?(.*)$/.exec(line))) { flushPara(); flushList(); quote.push(m[1]); continue; }
-      if ((m = /^\s*[-*+]\s+(.*)$/.exec(line))) {
-        flushPara(); flushQuote();
-        if (!list || list.type !== "ul") { flushList(); list = { type: "ul", items: [] }; }
-        list.items.push(m[1]);
-        continue;
-      }
-      if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) {
-        flushPara(); flushQuote();
-        if (!list || list.type !== "ol") { flushList(); list = { type: "ol", items: [] }; }
-        list.items.push(m[1]);
-        continue;
-      }
-      flushList(); flushQuote();
-      para.push(line);
-    }
-    flushAll();
-    return html.join("");
-  }
-
-  function renderMarkdown(src) {
-    src = String(src == null ? "" : src);
-    var parts = src.split("```");
-    var out = [];
-    for (var i = 0; i < parts.length; i++) {
-      if (i % 2 === 1) {
-        // fenced code block: first line may be a language tag
-        var chunk = parts[i];
-        var nl = chunk.indexOf("\n");
-        var lang = "";
-        var body = chunk;
-        if (nl >= 0) {
-          var head = chunk.slice(0, nl).trim();
-          if (/^[\w+.#-]*$/.test(head)) { lang = head; body = chunk.slice(nl + 1); }
-        } else if (/^[\w+.#-]*$/.test(chunk.trim())) {
-          // unterminated fence with only a language token
-          lang = chunk.trim(); body = "";
-        }
-        out.push('<pre class="code">' +
-          (lang ? '<div class="code-lang">' + esc(lang) + "</div>" : "") +
-          "<code>" + esc(body.replace(/\n$/, "")) + "</code></pre>");
-      } else if (parts[i]) {
-        out.push(renderBlocks(parts[i]));
-      }
-    }
-    return out.join("");
-  }
-
-  /* ------------------------------------------------------------------ */
   /* Messages: user / assistant                                          */
   /* ------------------------------------------------------------------ */
-
-  function addUserBubble(text) {
-    if (!text) return;
+  function addUserBubble(text, files) {
+    var list = Array.isArray(files) ? files : [];
+    if (!text && list.length === 0) return;
     var msg = document.createElement("div");
     msg.className = "msg user";
     var bubble = document.createElement("div");
     bubble.className = "bubble";
     bubble.style.whiteSpace = "pre-wrap";
-    bubble.textContent = String(text);
+    bubble.textContent = String(text || "");
+    if (list.length) {
+      // The host appends the paths to the prompt; the bubble shows what went
+      // along so the transcript is not silently different from what was sent.
+      var echo = document.createElement("span");
+      echo.className = "att-echo";
+      list.forEach(function (f) {
+        var item = document.createElement("span");
+        item.className = "att-echo-item";
+        var range = f.selection ? ":" + f.selection.startLine + "-" + f.selection.endLine : "";
+        item.textContent = (f.selection ? "✂ " : "📎 ") + f.name + range;
+        item.title = f.path;
+        echo.appendChild(item);
+      });
+      bubble.appendChild(echo);
+    }
     msg.appendChild(bubble);
     appendToMessages(msg);
   }
@@ -297,23 +184,67 @@
     return { root: root };
   }
 
+  // Signature of a content block for change detection.
+  function blockSig(b) {
+    if (!b) return "";
+    if (b.type === "text") return "t:" + (b.text != null ? b.text : "");
+    if (b.type === "thinking") return "k:" + (b.thinking != null ? b.thinking : (b.text != null ? b.text : ""));
+    if (b.type === "toolCall") return "c:" + (b.id != null ? b.id : "") + ":" + (b.name != null ? b.name : "");
+    return b.type + ":" + JSON.stringify(b);
+  }
+
+  // Render assistant message incrementally: only rebuild DOM from the first
+  // content block whose signature changed. Streaming appends to the last
+  // block, so the common case is "everything matches except the tail" — we
+  // patch only that tail instead of wiping the whole root.
   function renderAssistant(entry, message) {
     var root = entry.root;
-    // preserve which thinking blocks the user expanded across re-renders
-    var expanded = {};
-    var prev = root.querySelectorAll(".thinking");
-    for (var i = 0; i < prev.length; i++) {
-      if (!prev[i].classList.contains("collapsed")) expanded[i] = true;
-    }
-    root.innerHTML = "";
-
     var content = message && message.content;
     if (typeof content === "string") content = [{ type: "text", text: content }];
     if (!Array.isArray(content)) content = [];
 
-    var ti = 0;
+    // Capture expanded-state of existing thinking blocks before any rebuild.
+    var expanded = {};
+    if (!entry.sigs) {
+      var prev = root.querySelectorAll(".thinking");
+      for (var i = 0; i < prev.length; i++) {
+        if (!prev[i].classList.contains("collapsed")) expanded[i] = true;
+      }
+    }
+
+    // Find first diverging index.
+    var oldSigs = entry.sigs || [];
+    var firstDiff = content.length;
     for (var j = 0; j < content.length; j++) {
-      var block = content[j];
+      if (blockSig(content[j]) !== (oldSigs[j] || "")) { firstDiff = j; break; }
+    }
+    // If nothing changed, nothing to do.
+    if (entry.sigs && firstDiff === content.length && oldSigs.length === content.length) {
+      return;
+    }
+
+    // Remove DOM children from the first diverging block onward. Children of
+    // root are only .md and .thinking (toolCall blocks render as #messages
+    // siblings, not inside root), so we can drop trailing nodes directly.
+    var kids = Array.prototype.slice.call(root.children);
+    // Map content indices that produced a DOM node up to firstDiff.
+    var domIdx = 0;
+    for (var k = 0; k < firstDiff; k++) {
+      var bk = content[k];
+      if (bk && (bk.type === "text" ? bk.text : (bk.type === "thinking" ? (bk.thinking != null ? bk.thinking : bk.text) : null))) {
+        domIdx++;
+      }
+    }
+    // drop everything from domIdx onward
+    for (var d = domIdx; d < kids.length; d++) kids[d].remove();
+
+    // Rebuild from firstDiff.
+    var newSigs = [];
+    for (var j2 = 0; j2 < firstDiff; j2++) newSigs[j2] = oldSigs[j2];
+    var ti = domIdx; // thinking-block index for expanded-state continuity
+    for (var m = firstDiff; m < content.length; m++) {
+      var block = content[m];
+      newSigs[m] = blockSig(block);
       if (!block) continue;
       if (block.type === "text") {
         if (!block.text) continue;
@@ -331,10 +262,10 @@
         root.appendChild(t);
         ti++;
       } else if (block.type === "toolCall") {
-        // tool-cards are #messages-level siblings; may precede tool_execution_start
         ensureToolCard(block.id, block.name, block.arguments);
       }
     }
+    entry.sigs = newSigs;
     scrollBottom();
   }
 
@@ -491,6 +422,20 @@
   /* Notices                                                             */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * Surface a webview-side exception: once in the transcript (so it cannot go
+   * unnoticed) and always to the host's output channel (so it can be read).
+   */
+  var uiErrorShown = false;
+  function reportUiError(err, context) {
+    var detail = (err && (err.stack || err.message)) ? String(err.stack || err.message) : String(err);
+    post({ t: "uiError", message: detail, context: context != null ? String(context) : "" });
+    if (uiErrorShown) return;
+    uiErrorShown = true;
+    addNotice("error", "UI error while rendering — see the \"OMP Code\" output channel: " +
+      detail.split("\n")[0]);
+  }
+
   function addNotice(level, text) {
     if (!text) return null;
     level = (level === "warning" || level === "error") ? level : "info";
@@ -554,8 +499,10 @@
         autogrow();
         return;
       case "open_url":
-        toast("Opening browser…", 3000);
-        return; // host performs the actual open
+        // The host already opened the browser. Device-code providers also send
+        // a one-time code in `instructions` — without it the page is a dead end.
+        showAuthCard(f.url, f.instructions);
+        return;
       case "cancel": {
         var target = f.targetId != null ? f.targetId : (f.requestId != null ? f.requestId : f.cancelId);
         if (target == null) return;
@@ -784,6 +731,304 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Session history                                                     */
+  /* ------------------------------------------------------------------ */
+
+  var historyCard = null;
+  var historyList = null;
+
+  function relativeTime(ms) {
+    var diff = Date.now() - ms;
+    if (!isFinite(diff)) return "";
+    var min = Math.round(diff / 60000);
+    if (min < 1) return "just now";
+    if (min < 60) return min + "m ago";
+    var hours = Math.round(min / 60);
+    if (hours < 24) return hours + "h ago";
+    var days = Math.round(hours / 24);
+    if (days < 30) return days + "d ago";
+    return new Date(ms).toLocaleDateString();
+  }
+
+  /** "kimi-code/k3" → "k3"; the provider is already implied by the model name. */
+  function shortModel(id) {
+    var s = String(id);
+    var slash = s.indexOf("/");
+    return slash >= 0 ? s.slice(slash + 1) : s;
+  }
+
+  function folderName(p) {
+    var s = String(p || "").replace(/\/+$/, "");
+    var slash = s.lastIndexOf("/");
+    return slash >= 0 ? s.slice(slash + 1) : s;
+  }
+
+  function showHistoryCard() {
+    closeHistoryCard();
+    var el = document.createElement("div");
+    el.className = "ui-modal history-card";
+
+    var title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Session history";
+    el.appendChild(title);
+
+    var filter = document.createElement("input");
+    filter.className = "history-filter";
+    filter.type = "text";
+    filter.placeholder = "Filter sessions…";
+    filter.setAttribute("aria-label", "Filter sessions");
+    filter.addEventListener("input", function () {
+      renderHistoryRows(filter.value.trim().toLowerCase());
+    });
+    el.appendChild(filter);
+
+    historyList = document.createElement("div");
+    historyList.className = "history-list";
+    historyList.textContent = "Loading…";
+    el.appendChild(historyList);
+
+    var buttons = document.createElement("div");
+    buttons.className = "modal-buttons";
+    buttons.appendChild(modalButton("Close", false, function () { closeHistoryCard(); }));
+    el.appendChild(buttons);
+
+    modalHolder.appendChild(el);
+    historyCard = el;
+    filter.focus();
+  }
+
+  function closeHistoryCard() {
+    if (historyCard) { historyCard.remove(); historyCard = null; historyList = null; }
+  }
+
+  /**
+   * One flat list for the whole extension: every session, whatever model ran in
+   * it. The model is a small badge on the row, not a grouping.
+   */
+  var historySessions = [];
+  var historyCwd = "";
+
+  function renderHistory(sessions, cwd) {
+    historySessions = sessions;
+    historyCwd = cwd || "";
+    renderHistoryRows("");
+  }
+
+  function renderHistoryRows(query) {
+    if (!historyList) return;
+    historyList.textContent = "";
+    var sessions = !query ? historySessions : historySessions.filter(function (s) {
+      var hay = ((s.title || "") + " " + (s.preview || "") + " " + (s.cwd || "") +
+        " " + (s.models || []).join(" ")).toLowerCase();
+      return hay.indexOf(query) !== -1;
+    });
+    if (!sessions.length) {
+      historyList.textContent = query ? "No sessions match." : "No sessions yet.";
+      return;
+    }
+    sessions.forEach(function (s) {
+      var row = document.createElement("div");
+      row.className = "history-row";
+
+      var main = document.createElement("div");
+      main.className = "history-main";
+      main.textContent = s.title || s.preview || "(untitled session)";
+      row.appendChild(main);
+
+      var meta = document.createElement("div");
+      meta.className = "history-meta";
+
+      (s.models || []).forEach(function (m) {
+        var badge = document.createElement("span");
+        badge.className = "history-badge";
+        badge.textContent = shortModel(m);
+        badge.title = m;
+        meta.appendChild(badge);
+      });
+
+      var when = document.createElement("span");
+      when.className = "history-dim";
+      when.textContent = relativeTime(s.updatedAt) + " · " + s.userMessages +
+        (s.userMessages === 1 ? " message" : " messages");
+      meta.appendChild(when);
+
+      if (s.cwd && historyCwd && s.cwd !== historyCwd) {
+        var where = document.createElement("span");
+        where.className = "history-dim";
+        where.textContent = "· " + folderName(s.cwd);
+        where.title = s.cwd;
+        meta.appendChild(where);
+      }
+
+      row.appendChild(meta);
+      row.addEventListener("click", function () {
+        post({ t: "openSession", path: s.path });
+        toast("Opening session…", 3000);
+        closeHistoryCard();
+      });
+      historyList.appendChild(row);
+    });
+  }
+
+  /** Replay a stored transcript into an empty view (host sends {t:"reset"} first). */
+  function renderTranscript(messages) {
+    currentAssistant = null;
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      if (!m) continue;
+      if (m.role === "user") {
+        if (m.synthetic) continue;
+        addUserBubble(contentText(m.content));
+      } else if (m.role === "assistant") {
+        renderAssistant(newAssistantEntry(), m);
+      } else if (m.role === "toolResult") {
+        attachToolResult(m);
+      }
+    }
+    currentAssistant = null;
+    scrollBottom();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Sign-in card (OAuth redirect + device-code flows)                   */
+  /* ------------------------------------------------------------------ */
+
+  var authCard = null;
+  var authProvider = null;
+
+  var PROVIDER_LABELS = {
+    "anthropic": "Claude (Pro / Max)",
+    "kimi-code": "Kimi Code",
+    "openai-codex": "OpenAI Codex",
+    "zai": "Z.ai",
+    "github-copilot": "GitHub Copilot",
+    "cursor": "Cursor",
+  };
+
+  function providerLabel(id) {
+    return PROVIDER_LABELS[id] || String(id || "provider");
+  }
+
+  /** Pull the one-time user code out of instructions like "Enter code: H6UP-C8H2". */
+  function extractUserCode(instructions) {
+    if (!instructions) return "";
+    var m = String(instructions).match(/[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+/);
+    return m ? m[0] : "";
+  }
+
+  function showAuthCard(url, instructions) {
+    closeAuthCard();
+    var el = document.createElement("div");
+    el.className = "ui-modal auth-card";
+
+    var title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Sign in to " + providerLabel(authProvider);
+    el.appendChild(title);
+
+    var code = extractUserCode(instructions);
+
+    var msg = document.createElement("div");
+    msg.className = "modal-msg";
+    msg.textContent = code
+      ? "A browser tab was opened. Confirm this code on the page, then come back — the agent restarts by itself once authorization goes through."
+      : "A browser tab was opened. Finish the sign-in there; if a code is requested back here, an input box appears.";
+    el.appendChild(msg);
+
+    if (code) {
+      var codeBox = document.createElement("div");
+      codeBox.className = "auth-code";
+      codeBox.textContent = code;
+      el.appendChild(codeBox);
+    } else if (instructions) {
+      var raw = document.createElement("div");
+      raw.className = "auth-instructions";
+      raw.textContent = String(instructions);
+      el.appendChild(raw);
+    }
+
+    if (url) {
+      var link = document.createElement("div");
+      link.className = "auth-url";
+      link.textContent = String(url);
+      el.appendChild(link);
+    }
+
+    var status = document.createElement("div");
+    status.className = "auth-status";
+    status.textContent = "Waiting for authorization…";
+    el.appendChild(status);
+
+    var buttons = document.createElement("div");
+    buttons.className = "modal-buttons";
+    if (code) {
+      buttons.appendChild(modalButton("Copy code", false, function () {
+        post({ t: "copy", text: code });
+        toast("Code copied", 2000);
+      }));
+    }
+    if (url) {
+      buttons.appendChild(modalButton("Open page again", false, function () {
+        post({ t: "openExternal", url: String(url) });
+      }));
+    }
+    buttons.appendChild(modalButton("Hide", true, function () {
+      closeAuthCard();
+      toast("Sign-in still running in the background", 4000);
+    }));
+    el.appendChild(buttons);
+
+    modalHolder.appendChild(el);
+    authCard = el;
+  }
+
+  function closeAuthCard() {
+    if (authCard) { authCard.remove(); authCard = null; }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Rejected-key card                                                   */
+  /* ------------------------------------------------------------------ */
+
+  var deadKeyCard = null;
+
+  function showDeadKeyCard(which, label) {
+    if (deadKeyCard) return;
+    var el = document.createElement("div");
+    el.className = "ui-modal deadkey-card";
+
+    var title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Stored " + label + " API key is rejected";
+    el.appendChild(title);
+
+    var msg = document.createElement("div");
+    msg.className = "modal-msg";
+    msg.textContent = "The provider answers 401 for every model behind this key, so they are hidden from the picker. Removing the key does not touch your subscription sign-ins.";
+    el.appendChild(msg);
+
+    var buttons = document.createElement("div");
+    buttons.className = "modal-buttons";
+    buttons.appendChild(modalButton("Keep it", false, function () {
+      closeDeadKeyCard();
+    }));
+    buttons.appendChild(modalButton("Remove key", true, function () {
+      post({ t: "clearKey", which: which });
+      toast(label + " key removed — restarting agent", 4000);
+      closeDeadKeyCard();
+    }));
+    el.appendChild(buttons);
+
+    modalHolder.appendChild(el);
+    deadKeyCard = el;
+  }
+
+  function closeDeadKeyCard() {
+    if (deadKeyCard) { deadKeyCard.remove(); deadKeyCard = null; }
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Menus (model / thinking / settings)                                 */
   /* ------------------------------------------------------------------ */
 
@@ -844,15 +1089,49 @@
     closeMenu();
   });
 
+  /** Verified-model state, pushed by the host as probes land. */
+  var probe = { results: {}, running: false, enabled: true };
+  var showAllModels = false;
+
+  function probeVerdict(m) {
+    return probe.results[String(m.provider) + "/" + String(m.id)];
+  }
+
+  /**
+   * Models the picker offers. With verification on, that's the ones that
+   * answered a live request; unprobed models stay visible while the run is
+   * still going so the menu is never empty.
+   */
+  function usableModels() {
+    if (!probe.enabled || showAllModels) return models;
+    var verified = models.filter(function (m) {
+      var v = probeVerdict(m);
+      return v && v.ok;
+    });
+    if (verified.length) return verified;
+    return probe.running ? models : [];
+  }
+
   function buildModelMenu(menu) {
     if (!models.length) {
       addMenuLabel(menu, "models");
       addMenuItem(menu, "Loading models…", function () { closeMenu(); });
       return;
     }
+    var list = usableModels();
+    var hidden = models.length - list.length;
+
+    if (probe.enabled && probe.running) {
+      addMenuLabel(menu, "checking subscriptions…");
+    }
+    if (!list.length) {
+      addMenuLabel(menu, "models");
+      addMenuItem(menu, "No model answered — check your sign-ins", function () { closeMenu(); });
+    }
+
     var byProv = {};
     var order = [];
-    models.forEach(function (m) {
+    list.forEach(function (m) {
       if (!m) return;
       var p = m.provider != null ? String(m.provider) : "other";
       if (!byProv[p]) { byProv[p] = []; order.push(p); }
@@ -861,12 +1140,34 @@
     order.forEach(function (prov) {
       addMenuLabel(menu, prov);
       byProv[prov].forEach(function (m) {
-        addMenuItem(menu, m.name != null ? m.name : (m.id != null ? m.id : "?"), function () {
+        var label = m.name != null ? m.name : (m.id != null ? m.id : "?");
+        var v = probeVerdict(m);
+        if (showAllModels && v && !v.ok) {
+          label += "  ✕ " + (v.status != null ? v.status : "failed");
+        }
+        var item = addMenuItem(menu, label, function () {
           post({ t: "setModel", provider: m.provider, modelId: m.id });
           modelChip.textContent = m.name != null ? m.name : (m.id != null ? m.id : "model");
           closeMenu();
         });
+        if (v && !v.ok) item.classList.add("menu-item-dead");
       });
+    });
+
+    if (!probe.enabled) return;
+    addMenuLabel(menu, "verification");
+    if (hidden > 0 || showAllModels) {
+      addMenuItem(menu, showAllModels ? "Hide models that failed" : "Show all models (" + hidden + " hidden)", function () {
+        showAllModels = !showAllModels;
+        closeMenu();
+        openMenu(modelChip, buildModelMenu);
+      });
+    }
+    addMenuItem(menu, probe.running ? "Checking…" : "Re-check subscriptions", function () {
+      if (probe.running) return;
+      post({ t: "recheckModels" });
+      toast("Checking which models answer…", 4000);
+      closeMenu();
     });
   }
 
@@ -899,6 +1200,10 @@
         closeMenu();
         post({ t: "newSession" });
       });
+      addMenuItem(menu, "Export transcript as Markdown", function () {
+        closeMenu();
+        post({ t: "exportTranscript" });
+      });
       addMenuItem(menu, "Sign in with Claude (Pro/Max)", function () {
         closeMenu();
         post({ t: "login", providerId: "anthropic" });
@@ -912,6 +1217,30 @@
       addMenuItem(menu, "API keys…", function () {
         closeMenu();
         showSetupCard();
+      });
+      if (keyStatus.anthropic) {
+        addMenuItem(menu, "Remove stored Anthropic API key", function () {
+          closeMenu();
+          post({ t: "clearKey", which: "anthropic" });
+          toast("Anthropic key removed — restarting agent", 4000);
+        });
+      }
+      if (keyStatus.moonshot) {
+        addMenuItem(menu, "Remove stored Kimi (Moonshot) API key", function () {
+          closeMenu();
+          post({ t: "clearKey", which: "moonshot" });
+          toast("Kimi key removed — restarting agent", 4000);
+        });
+      }
+      addMenuItem(menu, "Re-check which models work", function () {
+        closeMenu();
+        post({ t: "recheckModels" });
+        toast("Checking which models answer…", 4000);
+      });
+      addMenuItem(menu, "Run diagnostics", function () {
+        closeMenu();
+        post({ t: "diagnostics" });
+        toast("Running diagnostics…", 4000);
       });
       addMenuItem(menu, "Compact context", function () {
         post({ t: "compact" });
@@ -969,7 +1298,7 @@
     slashPopup.innerHTML = "";
     slashItems.forEach(function (c, i) {
       var el = document.createElement("div");
-      el.className = "menu-item slash-item" + (i === slashSel ? " active" : "");
+      el.className = "menu-item" + (i === slashSel ? " active" : "");
       if (i === slashSel) el.style.background = "var(--vscode-list-hoverBackground)";
       var name = document.createElement("span");
       name.className = "slash-name";
@@ -998,6 +1327,313 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* @-mention file popup                                                */
+  /* ------------------------------------------------------------------ */
+
+  var atItems = [];
+  var atSel = 0;
+  var atSeq = 0;          // request token; stale replies are dropped
+  var atPendingToken = "";
+  var atDebounce = 0;
+
+  function atVisible() {
+    return !atPopup.classList.contains("hidden");
+  }
+
+  function hideAt() {
+    atPopup.classList.add("hidden");
+    atPopup.innerHTML = "";
+    atItems = [];
+    atSel = 0;
+    atPendingToken = "";
+    if (atDebounce) { clearTimeout(atDebounce); atDebounce = 0; }
+  }
+
+  /** The `@query` token ending at the caret, if the caret is inside one. */
+  function atQuery() {
+    var caret = input.selectionStart;
+    if (caret !== input.selectionEnd) return null; // selection, not a caret
+    var m = /(^|[\s(])@([\w./+-]*)$/.exec(input.value.slice(0, caret));
+    return m ? { query: m[2], start: caret - m[2].length - 1 } : null;
+  }
+
+  function updateAt() {
+    var hit = atQuery();
+    if (!hit || !hit.query) { hideAt(); return; }
+    clearTimeout(atDebounce);
+    atDebounce = setTimeout(function () {
+      var token = "f" + (++atSeq);
+      atPendingToken = token;
+      post({ t: "findFiles", query: hit.query, token: token });
+    }, 120);
+  }
+
+  function renderAt() {
+    atPopup.innerHTML = "";
+    atItems.forEach(function (f, i) {
+      var el = document.createElement("div");
+      el.className = "menu-item" + (i === atSel ? " active" : "");
+      if (i === atSel) el.style.background = "var(--vscode-list-hoverBackground)";
+      var name = document.createElement("span");
+      name.className = "slash-name";
+      name.textContent = f.name;
+      el.appendChild(name);
+      var dir = document.createElement("span");
+      dir.className = "slash-desc";
+      dir.textContent = " " + f.relative;
+      el.appendChild(dir);
+      el.addEventListener("mousedown", function (e) { e.preventDefault(); pickAt(i); });
+      atPopup.appendChild(el);
+    });
+    atPopup.classList.remove("hidden");
+  }
+
+  function pickAt(i) {
+    var f = atItems[i];
+    if (!f) return;
+    // Remove the `@query` token; the file itself travels as a chip, so the
+    // agent gets a validated absolute path rather than loose text.
+    var hit = atQuery();
+    if (hit) {
+      var caret = input.selectionStart;
+      input.value = input.value.slice(0, hit.start) + input.value.slice(caret);
+      input.selectionStart = input.selectionEnd = hit.start;
+    }
+    hideAt();
+    attachPaths([f.path]);
+    input.focus();
+    autogrow();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Palette                                                             */
+  /* ------------------------------------------------------------------ */
+
+  var THEMES = ["violet", "coral", "emerald", "amber", "magenta"];
+
+  /**
+   * Palette comes from settings: the preset switches body[data-theme], the
+   * optional custom accent is written through the CSSOM because our CSP
+   * forbids an inline <style> block.
+   */
+  function applyTheme(theme, accentColor) {
+    var id = THEMES.indexOf(String(theme || "")) >= 0 ? String(theme) : "violet";
+    document.body.setAttribute("data-theme", id);
+    var custom = String(accentColor || "").trim();
+    var root = document.documentElement;
+    if (custom && window.CSS && CSS.supports && CSS.supports("color", custom)) {
+      root.style.setProperty("--accent", custom);
+      root.style.setProperty("--accent-strong", custom);
+      root.style.setProperty("--accent-quiet", custom);
+    } else {
+      root.style.removeProperty("--accent");
+      root.style.removeProperty("--accent-strong");
+      root.style.removeProperty("--accent-quiet");
+      if (custom) toast("Ignoring ompcode.accentColor: " + custom + " is not a CSS color", 6000);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Attachments                                                         */
+  /* ------------------------------------------------------------------ */
+
+  /** 12345 → "12.3k" — token counts on the stats chip. */
+  function compactNum(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(Math.round(n));
+  }
+
+  function formatSize(bytes) {    if (typeof bytes !== "number" || !isFinite(bytes) || bytes < 0) return "";
+    if (bytes < 1024) return bytes + " B";
+    var units = ["KB", "MB", "GB"];
+    var value = bytes / 1024;
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+    return (value < 10 ? value.toFixed(1) : Math.round(value)) + " " + units[unit];
+  }
+
+  function renderAttachments() {
+    attachmentsEl.innerHTML = "";
+    attachments.forEach(function (att, i) {
+      var chip = document.createElement("span");
+      chip.className = "att-chip" + (att.pending ? " pending" : "") + (att.selection ? " selection" : "");
+      var range = att.selection ? ":" + att.selection.startLine + "-" + att.selection.endLine : "";
+      chip.title = att.pending ? "Copying…" : att.path + (att.selection ? " (lines " + att.selection.startLine + "–" + att.selection.endLine + ")" : "");
+
+      var icon = document.createElement("span");
+      icon.className = "att-icon";
+      icon.textContent = att.selection ? "✂" : "📎";
+      chip.appendChild(icon);
+
+      var name = document.createElement("span");
+      name.className = "att-name";
+      name.textContent = att.name + range;
+      chip.appendChild(name);
+
+      var size = formatSize(att.size);
+      if (size) {
+        var sizeEl = document.createElement("span");
+        sizeEl.className = "att-size";
+        sizeEl.textContent = size;
+        chip.appendChild(sizeEl);
+      }
+
+      var rm = document.createElement("button");
+      rm.className = "att-remove";
+      rm.type = "button";
+      rm.title = "Remove";
+      rm.setAttribute("aria-label", "Remove " + att.name);
+      rm.textContent = "✕";
+      rm.addEventListener("click", function () {
+        attachments.splice(i, 1);
+        renderAttachments();
+      });
+      chip.appendChild(rm);
+
+      attachmentsEl.appendChild(chip);
+    });
+  }
+
+  /** Confirmed attachments only — pending ones are not sendable yet. */
+  function readyAttachments() {
+    return attachments.filter(function (a) { return !a.pending && a.path; });
+  }
+
+  function addAttachment(att) {
+    // Same file twice = one chip, but a whole file and a selection from it
+    // (or two different ranges) are distinct context.
+    var key = att.path + (att.selection ? "#L" + att.selection.startLine + "-" + att.selection.endLine : "");
+    var already = attachments.some(function (a) {
+      var k = a.path + (a.selection ? "#L" + a.selection.startLine + "-" + a.selection.endLine : "");
+      return a.path && k === key;
+    });
+    if (already) return;
+    attachments.push(att);
+  }
+
+  /** Ask the host to resolve real filesystem paths (picker, editor drags). */
+  function attachPaths(paths) {
+    if (!paths || !paths.length) return;
+    post({ t: "attachPaths", paths: paths });
+  }
+
+  /**
+   * Bytes with no path (clipboard image, Finder drag): show a pending chip and
+   * ship the payload to the host, which spills it to extension storage.
+   */
+  function attachFile(file) {
+    if (!file) return;
+    var token = "a" + (++attachSeq);
+    attachments.push({ token: token, name: file.name || "pasted-file", size: file.size, pending: true });
+    renderAttachments();
+    var reader = new FileReader();
+    reader.onload = function () {
+      var buf = reader.result;
+      var bytes = new Uint8Array(buf);
+      var binary = "";
+      var CHUNK = 0x8000; // String.fromCharCode blows the stack on big arrays
+      for (var i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      post({
+        t: "attachData",
+        token: token,
+        name: file.name || "pasted-file",
+        mime: file.type || "",
+        data: btoa(binary),
+      });
+    };
+    reader.onerror = function () {
+      dropPending(token);
+      toast("Could not read " + (file.name || "the pasted file"), 5000);
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function dropPending(token) {
+    attachments = attachments.filter(function (a) { return a.token !== token; });
+    renderAttachments();
+  }
+
+  /**
+   * One entry point for every source of files: prefer real paths (nothing is
+   * copied), fall back to bytes.
+   */
+  function ingestDataTransfer(dt) {
+    if (!dt) return false;
+    var paths = [];
+    var types = dt.types ? Array.prototype.slice.call(dt.types) : [];
+    ["application/vnd.code.uri-list", "text/uri-list"].forEach(function (type) {
+      if (types.indexOf(type) < 0) return;
+      var raw = "";
+      try { raw = dt.getData(type); } catch (e) { raw = ""; }
+      if (raw) paths.push(raw);
+    });
+    if (paths.length) {
+      attachPaths(paths.join("\n").split(/\r?\n/));
+      return true;
+    }
+    var files = dt.files;
+    if (files && files.length) {
+      for (var i = 0; i < files.length; i++) attachFile(files[i]);
+      return true;
+    }
+    // A single absolute path pasted as plain text is a file reference too.
+    var text = "";
+    try { text = dt.getData("text/plain") || ""; } catch (e) { text = ""; }
+    var trimmed = text.trim();
+    if (trimmed && /^(\/|[A-Za-z]:[\\/])/.test(trimmed) && trimmed.indexOf("\n") < 0) {
+      attachPaths([trimmed]);
+      return true;
+    }
+    return false;
+  }
+
+  btnAttach.addEventListener("click", function () { post({ t: "pickFiles" }); });
+
+  // Ctrl/Cmd+V: files on the clipboard become attachments, text keeps its
+  // default paste behaviour.
+  document.addEventListener("paste", function (e) {
+    var dt = e.clipboardData;
+    if (!dt) return;
+    var hasFiles = (dt.files && dt.files.length > 0) ||
+      (dt.types && Array.prototype.indexOf.call(dt.types, "Files") >= 0);
+    if (!hasFiles) return;
+    e.preventDefault();
+    if (!ingestDataTransfer(dt)) {
+      toast("Nothing attachable on the clipboard", 4000);
+    }
+  });
+
+  // Drag & drop. VS Code only forwards a drop into a webview while Shift is
+  // held; without it the editor swallows the drag and nothing arrives here.
+  window.addEventListener("dragenter", function (e) {
+    if (!e.dataTransfer) return;
+    dragDepth++;
+    dropOverlay.classList.remove("hidden");
+  });
+  window.addEventListener("dragover", function (e) {
+    if (!e.dataTransfer) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    dropOverlay.classList.remove("hidden");
+  });
+  window.addEventListener("dragleave", function () {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropOverlay.classList.add("hidden");
+  });
+  window.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dragDepth = 0;
+    dropOverlay.classList.add("hidden");
+    if (!ingestDataTransfer(e.dataTransfer)) {
+      toast("Nothing attachable in that drop", 4000);
+    }
+    input.focus();
+  });
+
+  /* ------------------------------------------------------------------ */
   /* Composer                                                            */
   /* ------------------------------------------------------------------ */
 
@@ -1009,13 +1645,27 @@
 
   function sendPrompt() {
     var text = input.value.trim();
-    if (!text) return;
-    post({ t: "prompt", text: text });
+    var files = readyAttachments();
+    if (!text && files.length === 0) return;
+    if (attachments.length !== files.length) {
+      toast("Still copying an attachment…", 3000);
+      return;
+    }
+    post({ t: "prompt", text: text, attachments: files });
+    if (text && promptHistory[promptHistory.length - 1] !== text) {
+      promptHistory.push(text);
+      if (promptHistory.length > 100) promptHistory.shift();
+    }
+    historyIdx = -1;
+    historyDraft = "";
     pendingLocalUser++;
-    addUserBubble(text);
+    addUserBubble(text, files);
     input.value = "";
+    attachments = [];
+    renderAttachments();
     autogrow();
     hideSlash();
+    hideAt();
     setWorking(true);
     stuck = true;
     scrollBottom();
@@ -1024,9 +1674,29 @@
   input.addEventListener("input", function () {
     autogrow();
     updateSlash();
+    updateAt();
   });
 
   input.addEventListener("keydown", function (e) {
+    if (atVisible()) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        atSel = (atSel + 1) % atItems.length;
+        renderAt();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        atSel = (atSel - 1 + atItems.length) % atItems.length;
+        renderAt();
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        pickAt(atSel);
+        return;
+      }
+    }
     if (slashVisible()) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -1046,6 +1716,34 @@
         return;
       }
     }
+    if (e.key === "ArrowUp" && promptHistory.length && input.selectionStart === 0 && input.selectionEnd === 0) {
+      // Shell-style recall, only when the caret sits at the very start so a
+      // multi-line draft keeps its normal cursor movement everywhere else.
+      e.preventDefault();
+      if (historyIdx === -1) {
+        historyDraft = input.value;
+        historyIdx = promptHistory.length - 1;
+      } else if (historyIdx > 0) {
+        historyIdx--;
+      }
+      input.value = promptHistory[historyIdx];
+      input.selectionStart = input.selectionEnd = input.value.length;
+      autogrow();
+      return;
+    }
+    if (e.key === "ArrowDown" && historyIdx !== -1 && input.selectionStart === input.value.length) {
+      e.preventDefault();
+      historyIdx++;
+      if (historyIdx >= promptHistory.length) {
+        historyIdx = -1;
+        input.value = historyDraft;
+      } else {
+        input.value = promptHistory[historyIdx];
+      }
+      input.selectionStart = input.selectionEnd = input.value.length;
+      autogrow();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       sendPrompt();
@@ -1054,6 +1752,16 @@
 
   btnSend.addEventListener("click", sendPrompt);
   btnStop.addEventListener("click", function () { post({ t: "abort" }); });
+  // Guarded: a skeleton without this button must degrade to "no history
+  // button", never to a module-level throw that kills the whole webview.
+  if (btnHistory) {
+    btnHistory.addEventListener("click", function () {
+      if (historyCard) { closeHistoryCard(); return; }
+      showHistoryCard();
+      post({ t: "getHistory" });
+    });
+  }
+
   btnNew.addEventListener("click", function () { post({ t: "openNewTab" }); });
   btnRestart.addEventListener("click", function () {
     post({ t: "restart" });
@@ -1067,6 +1775,7 @@
     if (activeModal) { cancelActiveModal(); return; }
     if (openMenuEl) { closeMenu(); return; }
     if (slashVisible()) { hideSlash(); return; }
+    if (atVisible()) { hideAt(); return; }
     if (working) post({ t: "abort" });
   });
 
@@ -1085,10 +1794,44 @@
       th.parentElement.classList.toggle("collapsed");
       return;
     }
+    var diffBtnEl = t.closest(".tool-diff");
+    if (diffBtnEl) {
+      post({ t: "openDiff", toolCallId: diffBtnEl.getAttribute("data-id") });
+      return;
+    }
     var head = t.closest(".tool-head");
     if (head) { toggleTool(head.closest(".tool-card")); return; }
     var more = t.closest(".tool-more");
     if (more) { toggleTool(more.closest(".tool-card")); return; }
+    var insertBtn = t.closest(".code-insert");
+    if (insertBtn) {
+      var block = insertBtn.closest(".code-block");
+      var src = block && block.querySelector("pre code");
+      if (src) {
+        post({ t: "insertAtCursor", text: src.textContent });
+        insertBtn.textContent = "inserted";
+        setTimeout(function () { insertBtn.textContent = "insert"; }, 1500);
+      }
+      return;
+    }
+    var copyBtn = t.closest(".code-copy");
+    if (copyBtn) {
+      var pre = copyBtn.closest(".code-block") && copyBtn.closest(".code-block").querySelector("pre code");
+      if (pre) {
+        var text = pre.textContent;
+        try {
+          navigator.clipboard.writeText(text).then(function () {
+            copyBtn.textContent = "copied";
+            copyBtn.classList.add("copied");
+            setTimeout(function () {
+              copyBtn.textContent = "copy";
+              copyBtn.classList.remove("copied");
+            }, 1500);
+          });
+        } catch (err) { /* clipboard unavailable */ }
+      }
+      return;
+    }
   });
 
   /* ------------------------------------------------------------------ */
@@ -1149,8 +1892,11 @@
     pendingLocalUser = 0;
     retryNotice = null;
     compactNotice = null;
+    attachments = [];
+    renderAttachments();
     setWorking(false);
     hideSlash();
+    hideAt();
     closeMenu();
     modalQueue = [];
     if (activeModal) { activeModal.el.remove(); activeModal = null; }
@@ -1288,6 +2034,121 @@
           keyStatus.anthropic = !!m.anthropic;
           keyStatus.moonshot = !!m.moonshot;
           break;
+        case "showHistory":
+          showHistoryCard();
+          post({ t: "getHistory" });
+          break;
+        case "history":
+          renderHistory(Array.isArray(m.sessions) ? m.sessions : [], m.cwd);
+          break;
+        case "transcript":
+          renderTranscript(Array.isArray(m.messages) ? m.messages : []);
+          break;
+        case "deadKey":
+          showDeadKeyCard(m.which, m.label != null ? m.label : "provider");
+          break;
+        case "probe":
+          probe = {
+            results: m.results && typeof m.results === "object" ? m.results : {},
+            running: !!m.running,
+            enabled: m.enabled !== false,
+          };
+          if (openMenuEl && openMenuAnchor === modelChip) {
+            // Verdicts arrived while the picker is open — rebuild it in place.
+            closeMenu();
+            openMenu(modelChip, buildModelMenu);
+          }
+          break;
+        case "authStart":
+          authProvider = m.providerId;
+          toast("Opening browser for " + providerLabel(authProvider) + "…", 4000);
+          break;
+        case "authDone":
+          closeAuthCard();
+          if (m.ok) {
+            closeSetupCard();
+            toast("Signed in to " + providerLabel(m.providerId), 4000);
+          }
+          authProvider = null;
+          break;
+        case "attached": {
+          if (m.token) dropPending(m.token);
+          var incoming = Array.isArray(m.files) ? m.files : [];
+          incoming.forEach(function (f) {
+            if (f && f.path) addAttachment({ path: f.path, name: f.name || f.path, size: f.size });
+          });
+          renderAttachments();
+          var rejected = Array.isArray(m.rejected) ? m.rejected : [];
+          if (rejected.length) toast("Not attached — " + rejected.join("; "), 6000);
+          if (incoming.length) input.focus();
+          break;
+        }
+        case "attachContext": {
+          // Editor selection sent via "OMP Code: Add Selection to Chat".
+          var att = m.attachment;
+          if (att && att.path) {
+            addAttachment(att);
+            renderAttachments();
+            input.focus();
+          }
+          break;
+        }
+        case "activeFile": {
+          var file = m.file;
+          if (file && file.path) {
+            fileChip.textContent = file.name || file.path;
+            fileChip.title = file.path;
+            fileChip.classList.remove("hidden");
+          } else {
+            fileChip.classList.add("hidden");
+          }
+          break;
+        }
+        case "theme":
+          applyTheme(m.theme, m.accentColor);
+          break;
+        case "fileCandidates": {
+          // Stale reply (user kept typing) — the newest query owns the popup.
+          if (m.token !== atPendingToken || !atPendingToken) break;
+          atItems = Array.isArray(m.files) ? m.files : [];
+          atSel = 0;
+          if (!atItems.length) { hideAt(); break; }
+          renderAt();
+          break;
+        }
+        case "sessionStats": {
+          var st = m.stats && typeof m.stats === "object" ? m.stats : {};
+          var tok = st.tokens && typeof st.tokens === "object" ? st.tokens : {};
+          var parts = [];
+          if (typeof tok.input === "number" && tok.input > 0) parts.push("↑" + compactNum(tok.input));
+          if (typeof tok.output === "number" && tok.output > 0) parts.push("↓" + compactNum(tok.output));
+          var cost = typeof st.cost === "number" ? st.cost : 0;
+          if (cost > 0) parts.push("$" + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)));
+          if (parts.length) {
+            statsChip.textContent = parts.join(" ");
+            var tip = "Session usage";
+            if (tok.reasoning > 0) tip += " · reasoning " + compactNum(tok.reasoning);
+            if (tok.cacheRead > 0) tip += " · cache read " + compactNum(tok.cacheRead);
+            statsChip.title = tip;
+            statsChip.classList.remove("hidden");
+          }
+          break;
+        }
+        case "diffAvailable": {
+          var diffCard = byToolCallId.get(String(m.toolCallId));
+          var diffHead = diffCard && diffCard.querySelector(".tool-head");
+          if (diffHead && !diffHead.querySelector(".tool-diff")) {
+            var diffBtn = document.createElement("button");
+            diffBtn.className = "tool-diff";
+            diffBtn.type = "button";
+            diffBtn.textContent = "diff";
+            diffBtn.title = "Open diff (before ↔ current)";
+            diffBtn.setAttribute("data-id", String(m.toolCallId));
+            var toggle = diffHead.querySelector(".tool-toggle");
+            diffHead.insertBefore(diffBtn, toggle || null);
+          }
+          break;
+        }
         case "boot": {
           var cfg = m.cfg || {};
           if (cfg.thinkingLevel) thinkingChip.textContent = "think: " + cfg.thinkingLevel;
@@ -1296,6 +2157,7 @@
             var slash = mm.indexOf("/");
             modelChip.textContent = slash >= 0 ? mm.slice(slash + 1) : mm;
           }
+          applyTheme(cfg.theme, cfg.accentColor);
           break;
         }
         case "reset":
@@ -1305,7 +2167,9 @@
           break;
       }
     } catch (err) {
-      // never let one bad message break the UI
+      // Keep the UI alive, but never swallow silently: a ReferenceError in the
+      // render path once made every assistant reply vanish with no trace.
+      reportUiError(err, m && m.t);
     }
   });
 
@@ -1316,4 +2180,3 @@
   autogrow();
   input.focus();
   post({ t: "ready" });
-})();
