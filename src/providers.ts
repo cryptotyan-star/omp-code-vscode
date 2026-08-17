@@ -43,4 +43,13 @@ export const KEYED_PROVIDERS: readonly KeyedProvider[] = [
     placeholder: "sk-…",
     commandId: "ompcode.setKimiKey",
   },
+  {
+    id: "zhipu",
+    provider: "zhipu-coding-plan",
+    secret: "ompcode.zhipuApiKey",
+    envVar: "ZHIPU_API_KEY",
+    label: "GLM (Zhipu BigModel)",
+    placeholder: "…",
+    commandId: "ompcode.setGlmKey",
+  },
 ];
