@@ -3,8 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { MAX_SNIPPET_CHARS, type Attachment } from "./attachments";
-import { ChatViewProvider, ANTHROPIC_KEY_SECRET, MOONSHOT_KEY_SECRET } from "./chatViewProvider";
+import { ChatViewProvider } from "./chatViewProvider";
 import { OmpSession, type DiffStore } from "./ompSession";
+import { KEYED_PROVIDERS } from "./providers";
 
 const MODELS_YML_TEMPLATE = `# ~/.omp/agent/models.yml — custom model providers for the omp CLI.
 #
@@ -239,12 +240,10 @@ export function activate(context: vscode.ExtensionContext): void {
       (await revealChatTab())?.showHistory();
     }),
 
-    vscode.commands.registerCommand("ompcode.setAnthropicKey", () =>
-      setKeyCommand("Anthropic", ANTHROPIC_KEY_SECRET, "sk-ant-…", "ANTHROPIC_API_KEY"),
-    ),
-
-    vscode.commands.registerCommand("ompcode.setKimiKey", () =>
-      setKeyCommand("Kimi (Moonshot)", MOONSHOT_KEY_SECRET, "sk-…", "MOONSHOT_API_KEY"),
+    ...KEYED_PROVIDERS.map((p) =>
+      vscode.commands.registerCommand(p.commandId, () =>
+        setKeyCommand(p.label, p.secret, p.placeholder, p.envVar),
+      ),
     ),
 
     vscode.commands.registerCommand("ompcode.diagnostics", async () => {
@@ -259,10 +258,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // A stale key is worse than no key: omp lists the provider's whole model
       // range and every one of them answers 401.
       const picked = await vscode.window.showQuickPick(
-        [
-          { label: "Anthropic API key", secret: ANTHROPIC_KEY_SECRET },
-          { label: "Kimi (Moonshot) API key", secret: MOONSHOT_KEY_SECRET },
-        ],
+        KEYED_PROVIDERS.map((p) => ({ label: `${p.label} API key`, secret: p.secret })),
         { title: "OMP Code: Clear stored API key", placeHolder: "Subscription sign-ins are not affected" },
       );
       if (!picked) return;

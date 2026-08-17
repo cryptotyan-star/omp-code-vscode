@@ -25,9 +25,8 @@ import {
   type ProbeCandidate,
   type ProbeResults,
 } from "./probe";
+import { KEYED_PROVIDERS } from "./providers";
 
-export const ANTHROPIC_KEY_SECRET = "ompcode.anthropicApiKey";
-export const MOONSHOT_KEY_SECRET = "ompcode.moonshotApiKey";
 /** globalState key holding the last probe verdicts, shared by every session. */
 const PROBE_STATE_KEY = "ompcode.probeResults";
 
@@ -248,15 +247,12 @@ export class OmpSession implements vscode.Disposable {
   ): Promise<{ env: NodeJS.ProcessEnv; injectedEnvKeys: string[] }> {
     const env: NodeJS.ProcessEnv = { ...process.env };
     const injectedEnvKeys: string[] = [];
-    const anthropicKey = await this.context.secrets.get(ANTHROPIC_KEY_SECRET);
-    if (anthropicKey) {
-      env.ANTHROPIC_API_KEY = anthropicKey;
-      injectedEnvKeys.push("ANTHROPIC_API_KEY");
-    }
-    const moonshotKey = await this.context.secrets.get(MOONSHOT_KEY_SECRET);
-    if (moonshotKey) {
-      env.MOONSHOT_API_KEY = moonshotKey;
-      injectedEnvKeys.push("MOONSHOT_API_KEY");
+    for (const p of KEYED_PROVIDERS) {
+      const key = await this.context.secrets.get(p.secret);
+      if (key) {
+        env[p.envVar] = key;
+        injectedEnvKeys.push(p.envVar);
+      }
     }
     if (bootstrapLogin && !env.ANTHROPIC_API_KEY) {
       // omp refuses to start with zero models, but OAuth sign-in needs a live
@@ -721,15 +717,19 @@ export class OmpSession implements vscode.Disposable {
           await this.attachData(msg);
           return;
         case "setKeys": {
-          const anthropic = typeof msg.anthropic === "string" ? msg.anthropic.trim() : "";
-          const moonshot = typeof msg.moonshot === "string" ? msg.moonshot.trim() : "";
-          if (anthropic) {
-            await this.context.secrets.store(ANTHROPIC_KEY_SECRET, anthropic);
+          const keys =
+            msg.keys && typeof msg.keys === "object"
+              ? (msg.keys as Record<string, unknown>)
+              : {};
+          let saved = 0;
+          for (const p of KEYED_PROVIDERS) {
+            const value = typeof keys[p.id] === "string" ? (keys[p.id] as string).trim() : "";
+            if (value) {
+              await this.context.secrets.store(p.secret, value);
+              saved++;
+            }
           }
-          if (moonshot) {
-            await this.context.secrets.store(MOONSHOT_KEY_SECRET, moonshot);
-          }
-          if (anthropic || moonshot) {
+          if (saved) {
             this.output.appendLine("[omp] API keys saved — restarting all sessions");
             OmpSession.forEachActive((session) => {
               void session.restart();
@@ -744,9 +744,12 @@ export class OmpSession implements vscode.Disposable {
         case "clearKey": {
           // A key that answers 401 is worse than no key: it makes omp list the
           // provider's whole model range, all of it dead.
-          const which = msg.which === "anthropic" ? ANTHROPIC_KEY_SECRET : MOONSHOT_KEY_SECRET;
-          await this.context.secrets.delete(which);
-          this.output.appendLine(`[omp] cleared secret ${which} — restarting all sessions`);
+          const entry = KEYED_PROVIDERS.find((p) => p.id === msg.which);
+          if (!entry) {
+            return;
+          }
+          await this.context.secrets.delete(entry.secret);
+          this.output.appendLine(`[omp] cleared secret ${entry.secret} — restarting all sessions`);
           await this.pushKeyStatus();
           OmpSession.forEachActive((session) => {
             void session.restart();
@@ -1419,19 +1422,13 @@ export class OmpSession implements vscode.Disposable {
     }
   }
 
-  /** Providers whose credential this extension supplies from Secret Storage. */
-  private static readonly KEYED_PROVIDERS = [
-    { provider: "anthropic", secret: ANTHROPIC_KEY_SECRET, which: "anthropic", label: "Anthropic" },
-    { provider: "moonshot", secret: MOONSHOT_KEY_SECRET, which: "moonshot", label: "Kimi (Moonshot)" },
-  ] as const;
-
   /**
    * A stored key that answers 401 is the worst state to be in: omp offers the
    * provider's whole model range and every entry fails. Tell the webview so it
    * can offer removing it in one click.
    */
   private async warnAboutDeadKeys(results: ProbeResults): Promise<void> {
-    for (const entry of OmpSession.KEYED_PROVIDERS) {
+    for (const entry of KEYED_PROVIDERS) {
       const dead = Object.entries(results).some(
         ([key, verdict]) =>
           key.startsWith(`${entry.provider}/`) && !verdict.ok && isProviderLevelFailure(verdict),
@@ -1441,7 +1438,7 @@ export class OmpSession implements vscode.Disposable {
       }
       this.output.appendLine(`[omp] stored ${entry.label} API key is rejected (401)`);
       OmpSession.forEachActive((session) => {
-        session.post({ t: "deadKey", which: entry.which, label: entry.label });
+        session.post({ t: "deadKey", which: entry.id, label: entry.label });
       });
     }
   }
@@ -1510,9 +1507,22 @@ export class OmpSession implements vscode.Disposable {
   }
 
   private async pushKeyStatus(): Promise<void> {
-    const anthropic = Boolean(await this.context.secrets.get(ANTHROPIC_KEY_SECRET));
-    const moonshot = Boolean(await this.context.secrets.get(MOONSHOT_KEY_SECRET));
-    this.post({ t: "keyStatus", anthropic, moonshot });
+    const keys: Record<string, boolean> = {};
+    for (const p of KEYED_PROVIDERS) {
+      keys[p.id] = Boolean(await this.context.secrets.get(p.secret));
+    }
+    // The setup form renders from this list, so a new table row needs no
+    // webview change.
+    this.post({
+      t: "keyStatus",
+      keys,
+      providers: KEYED_PROVIDERS.map((p) => ({
+        id: p.id,
+        label: p.label,
+        envVar: p.envVar,
+        placeholder: p.placeholder,
+      })),
+    });
   }
 
   /**

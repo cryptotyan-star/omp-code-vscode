@@ -648,7 +648,10 @@
   /* API key setup card                                                  */
   /* ------------------------------------------------------------------ */
 
-  var keyStatus = { anthropic: false, moonshot: false };
+  // Rendered from the extension's keyed-provider table: keys = {id: configured},
+  // keyedProviders = [{id,label,envVar,placeholder}] driving the setup form.
+  var keyStatus = {};
+  var keyedProviders = [];
   var setupCard = null;
 
   function keyPlaceholder(configured, hint) {
@@ -703,8 +706,11 @@
       return inp;
     }
 
-    var anthropicInp = field("Anthropic API key (ANTHROPIC_API_KEY)", "sk-ant-…", keyStatus.anthropic);
-    var kimiInp = field("Kimi / Moonshot API key (MOONSHOT_API_KEY)", "sk-…", keyStatus.moonshot);
+    var inputs = [];
+    keyedProviders.forEach(function (p) {
+      var inp = field(p.label + " API key (" + p.envVar + ")", p.placeholder, keyStatus[p.id]);
+      inputs.push({ id: p.id, inp: inp });
+    });
 
     var buttons = document.createElement("div");
     buttons.className = "modal-buttons";
@@ -712,10 +718,14 @@
       closeSetupCard();
     }));
     buttons.appendChild(modalButton("Save & Restart", true, function () {
-      var a = anthropicInp.value.trim();
-      var k = kimiInp.value.trim();
-      if (!a && !k) { toast("Enter at least one key", 3000); return; }
-      post({ t: "setKeys", anthropic: a, moonshot: k });
+      var keys = {};
+      var any = false;
+      inputs.forEach(function (entry) {
+        var v = entry.inp.value.trim();
+        if (v) { keys[entry.id] = v; any = true; }
+      });
+      if (!any) { toast("Enter at least one key", 3000); return; }
+      post({ t: "setKeys", keys: keys });
       toast("Saving keys, restarting agent…", 4000);
       closeSetupCard();
     }));
@@ -723,7 +733,7 @@
 
     modalHolder.appendChild(el);
     setupCard = el;
-    setTimeout(function () { anthropicInp.focus(); }, 0);
+    setTimeout(function () { if (inputs.length) inputs[0].inp.focus(); }, 0);
   }
 
   function closeSetupCard() {
@@ -1218,20 +1228,14 @@
         closeMenu();
         showSetupCard();
       });
-      if (keyStatus.anthropic) {
-        addMenuItem(menu, "Remove stored Anthropic API key", function () {
+      keyedProviders.forEach(function (p) {
+        if (!keyStatus[p.id]) return;
+        addMenuItem(menu, "Remove stored " + p.label + " API key", function () {
           closeMenu();
-          post({ t: "clearKey", which: "anthropic" });
-          toast("Anthropic key removed — restarting agent", 4000);
+          post({ t: "clearKey", which: p.id });
+          toast(p.label + " key removed — restarting agent", 4000);
         });
-      }
-      if (keyStatus.moonshot) {
-        addMenuItem(menu, "Remove stored Kimi (Moonshot) API key", function () {
-          closeMenu();
-          post({ t: "clearKey", which: "moonshot" });
-          toast("Kimi key removed — restarting agent", 4000);
-        });
-      }
+      });
       addMenuItem(menu, "Re-check which models work", function () {
         closeMenu();
         post({ t: "recheckModels" });
@@ -2031,8 +2035,8 @@
           break;
         }
         case "keyStatus":
-          keyStatus.anthropic = !!m.anthropic;
-          keyStatus.moonshot = !!m.moonshot;
+          keyStatus = m.keys || {};
+          if (Array.isArray(m.providers)) keyedProviders = m.providers;
           break;
         case "showHistory":
           showHistoryCard();

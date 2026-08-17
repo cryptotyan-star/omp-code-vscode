@@ -2,8 +2,6 @@ import * as vscode from "vscode";
 import type { Attachment } from "./attachments";
 import { OmpSession, type DiffStore } from "./ompSession";
 
-export { ANTHROPIC_KEY_SECRET, MOONSHOT_KEY_SECRET } from "./ompSession";
-
 /**
  * Sidebar chat view (`ompcode.chat`). Thin shell around one OmpSession; the
  * same session class also backs editor-area chat tabs (see extension.ts).
