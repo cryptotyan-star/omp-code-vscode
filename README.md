@@ -34,6 +34,8 @@ Two ways to authenticate / два способа аутентификации:
 2. **API keys** — stored in VS Code Secret Storage, never written to plaintext config:
    - **OMP Code: Set Anthropic API Key** → passed to `omp` as `ANTHROPIC_API_KEY`.
    - **OMP Code: Set Kimi (Moonshot) API Key** → passed as `MOONSHOT_API_KEY`.
+   - **OMP Code: Set GLM (Zhipu BigModel) API Key** → passed as `ZHIPU_API_KEY` (native `zhipu-coding-plan` provider, GLM catalog incl. `glm-5.2`).
+   - **OMP Code: Set Qwen (Alibaba Coding Plan) API Key** → passed as `ALIBABA_CODING_PLAN_API_KEY` (native `alibaba-coding-plan` provider, Qwen catalog). Plain DashScope pay-as-you-go keys go through a custom provider instead (below).
    - **OMP Code: Set Custom Provider API Key** → injects an `apiKey` into a `customProviders` entry at agent start (the settings.json value is used as a fallback).
 
 1. **Подписка (Claude Pro/Max или Kimi Code)** — выполните **OMP Code: Sign in with Claude (Subscription)** или **OMP Code: Sign in with Kimi Code (Subscription)** из палитры команд. Откроется браузер для OAuth; после входа агент перезапустится.
@@ -41,6 +43,8 @@ Two ways to authenticate / два способа аутентификации:
 2. **API-ключи** — хранятся в Secret Storage VS Code, не попадают в конфиг в открытом виде:
    - **OMP Code: Set Anthropic API Key** → передаётся `omp` как `ANTHROPIC_API_KEY`.
    - **OMP Code: Set Kimi (Moonshot) API Key** → передаётся как `MOONSHOT_API_KEY`.
+   - **OMP Code: Set GLM (Zhipu BigModel) API Key** → передаётся как `ZHIPU_API_KEY` (нативный провайдер `zhipu-coding-plan`, каталог GLM включая `glm-5.2`).
+   - **OMP Code: Set Qwen (Alibaba Coding Plan) API Key** → передаётся как `ALIBABA_CODING_PLAN_API_KEY` (нативный провайдер `alibaba-coding-plan`, каталог Qwen). Обычный DashScope-ключ (pay-as-you-go) подключается через кастомного провайдера (ниже).
    - **OMP Code: Set Custom Provider API Key** → вливает `apiKey` в запись `customProviders` при старте агента (значение из settings.json используется как fallback).
 
 ## Custom providers / Кастомные провайдеры

@@ -28,6 +28,8 @@ media/main.css                                                                  
   - `ompcode.newSession` — "OMP Code: New Chat Tab" (icon `$(add)`)
   - `ompcode.setAnthropicKey` — "OMP Code: Set Anthropic API Key"
   - `ompcode.setKimiKey` — "OMP Code: Set Kimi (Moonshot) API Key"
+  - `ompcode.setGlmKey` — "OMP Code: Set GLM (Zhipu BigModel) API Key"
+  - `ompcode.setQwenKey` — "OMP Code: Set Qwen (Alibaba Coding Plan) API Key"
   - `ompcode.loginClaude` — "OMP Code: Sign in with Claude (Subscription)"
   - `ompcode.loginKimi` — "OMP Code: Sign in with Kimi Code (Subscription)"
   - `ompcode.openModelsConfig` — "OMP Code: Open models.yml (Custom Providers)"
@@ -201,7 +203,11 @@ device-code flow → models `kimi-code/k3`, `k3-256k`, `kimi-for-coding` on
 - After process ready-init sequence: post state+models+commands proactively.
 - extension.ts: activate → register provider (retainContextWhenHidden true via `webviewOptions`), commands:
   - newSession → post to webview `{t:"frame",frame:{type:"__newSession"}}`? NO — call provider.newSession() which does the RPC + notifies webview `{t:"reset"}`.
-  - setAnthropicKey → `window.showInputBox({password:true})` → `context.secrets.store("ompcode.anthropicApiKey", v)` → offer restart.
+  - set*Key (one command per `KEYED_PROVIDERS` row in src/providers.ts) →
+    `window.showInputBox({password:true})` → `context.secrets.store(p.secret, v)` → offer restart.
+    `buildEnv()` injects each stored key as the row's `envVar`; the webview
+    setup form renders from `{t:"keyStatus", keys, providers}` and saves via
+    `{t:"setKeys", keys: {id: value}}`.
   - openModelsConfig → ensure `~/.omp/agent/models.yml` exists (create with commented template incl. `akemi` example) → `window.showTextDocument`.
   - restart → provider.restart().
 - On config change of `ompcode.*` → restart process.
