@@ -76,6 +76,10 @@
         "title": "OMP Code: Set GLM (Zhipu BigModel) API Key"
       },
       {
+        "command": "ompcode.setQwenKey",
+        "title": "OMP Code: Set Qwen (Alibaba Coding Plan) API Key"
+      },
+      {
         "command": "ompcode.loginClaude",
         "title": "OMP Code: Sign in with Claude (Subscription)"
       },

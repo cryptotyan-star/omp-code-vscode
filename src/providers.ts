@@ -52,4 +52,13 @@ export const KEYED_PROVIDERS: readonly KeyedProvider[] = [
     placeholder: "…",
     commandId: "ompcode.setGlmKey",
   },
+  {
+    id: "alibaba",
+    provider: "alibaba-coding-plan",
+    secret: "ompcode.alibabaApiKey",
+    envVar: "ALIBABA_CODING_PLAN_API_KEY",
+    label: "Qwen (Alibaba Coding Plan)",
+    placeholder: "sk-…",
+    commandId: "ompcode.setQwenKey",
+  },
 ];
