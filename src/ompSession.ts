@@ -30,6 +30,14 @@ import { KEYED_PROVIDERS } from "./providers";
 /** globalState key holding the last probe verdicts, shared by every session. */
 const PROBE_STATE_KEY = "ompcode.probeResults";
 
+/**
+ * omp's three approval tiers (`--approval-mode`). Native harnesses have four
+ * to six modes each — Claude Code alone has six — so the picker presents
+ * these as the nearest rung, never as an equivalence.
+ */
+export const APPROVAL_MODES = ["always-ask", "write", "yolo"] as const;
+export type ApprovalMode = (typeof APPROVAL_MODES)[number];
+
 interface WebviewMessage {
   t?: string;
   [key: string]: unknown;
@@ -394,8 +402,7 @@ export class OmpSession implements vscode.Disposable {
     });
 
     this.output.appendLine(
-      `[omp] starting: ${ompPath} --mode rpc-ui --cwd ${cwd}` +
-        (approvalMode !== "always-ask" ? ` --approval-mode ${approvalMode}` : ""),
+      `[omp] starting: ${ompPath} --mode rpc-ui --cwd ${cwd} --approval-mode ${approvalMode}`,
     );
     proc.start({ ompPath, cwd, env, approvalMode });
   }
@@ -440,6 +447,29 @@ export class OmpSession implements vscode.Disposable {
         const title = typeof frame.title === "string" ? frame.title : undefined;
         if (title) {
           this.callbacks.onTitle?.(title);
+        }
+      } else if (frame.method === "select" || frame.method === "confirm") {
+        // Tool approval arrives this way under --approval-mode always-ask/write:
+        // omp blocks the tool call on uiContext.select() and waits for an
+        // extension_ui_response. The dialog carries no timeout, so failing to
+        // answer hangs the call forever — the webview must always reply.
+        const id = typeof frame.id === "string" ? frame.id : undefined;
+        if (!id) {
+          return;
+        }
+        this.post({
+          t: "uiPrompt",
+          id,
+          method: frame.method,
+          title: typeof frame.title === "string" ? frame.title : "",
+          message: typeof frame.message === "string" ? frame.message : "",
+          options: Array.isArray(frame.options) ? frame.options.map((o) => String(o)) : [],
+        });
+      } else if (frame.method === "cancel") {
+        // omp withdrew the request (turn aborted) — drop the card.
+        const targetId = typeof frame.targetId === "string" ? frame.targetId : undefined;
+        if (targetId) {
+          this.post({ t: "uiPromptCancel", id: targetId });
         }
       }
     }
@@ -535,6 +565,7 @@ export class OmpSession implements vscode.Disposable {
             cfg: {
               defaultModel: cfg.get<string>("defaultModel", ""),
               thinkingLevel: cfg.get<string>("thinkingLevel", "auto"),
+              approvalMode: cfg.get<string>("approvalMode", "always-ask"),
               theme: OmpSession.themeId(cfg.get<string>("theme", "violet")),
               accentColor: cfg.get<string>("accentColor", ""),
             },
@@ -615,6 +646,40 @@ export class OmpSession implements vscode.Disposable {
           await this.request({ type: "set_thinking_level", level: msg.level });
           await this.pushState();
           return;
+        case "uiReply": {
+          // Answer to an extension_ui_request (tool approval). Shapes per
+          // RpcExtensionUIResponse: select → {value}, confirm → {confirmed},
+          // dismissed → {cancelled:true}.
+          const id = typeof msg.id === "string" ? msg.id : "";
+          if (!id) {
+            return;
+          }
+          const frame: Record<string, unknown> = { type: "extension_ui_response", id };
+          if (typeof msg.value === "string") {
+            frame.value = msg.value;
+          } else if (typeof msg.confirmed === "boolean") {
+            frame.confirmed = msg.confirmed;
+          } else {
+            frame.cancelled = true;
+          }
+          this.proc?.send(frame);
+          return;
+        }
+        case "setApproval": {
+          // Approval is a spawn argument, so it can only change by restarting.
+          // Persisted globally: an approval level chosen for one chat is a
+          // trust decision about the tool, not about that tab.
+          const mode = typeof msg.mode === "string" ? msg.mode : "";
+          if (!APPROVAL_MODES.includes(mode as ApprovalMode)) {
+            return;
+          }
+          await vscode.workspace
+            .getConfiguration("ompcode")
+            .update("approvalMode", mode, vscode.ConfigurationTarget.Global);
+          // The config-change watcher restarts every session, so do not
+          // restart here as well — that would spawn the agent twice.
+          return;
+        }
         case "getModels":
           await this.pushModels();
           return;
@@ -1554,6 +1619,13 @@ export class OmpSession implements vscode.Disposable {
       this.streaming = (state as Record<string, unknown>).isStreaming as boolean;
     }
     this.post({ t: "state", state });
+    // The agent has no notion of approval — it is a spawn argument — so the
+    // chip is refreshed from config here, which also catches a change made
+    // directly in settings.json rather than from the chip.
+    this.post({
+      t: "approval",
+      mode: vscode.workspace.getConfiguration("ompcode").get<string>("approvalMode", "always-ask"),
+    });
     this.callbacks.onState?.(state);
   }
 
@@ -1683,6 +1755,7 @@ export class OmpSession implements vscode.Disposable {
         <button id="btn-attach" class="chip attach" title="Attach files (Ctrl/Cmd+V to paste, Shift+drag to drop)" aria-label="Attach files">📎</button>
         <button id="model-chip" class="chip" aria-label="Select model">model</button>
         <button id="thinking-chip" class="chip" aria-label="Thinking level">think: auto</button>
+        <button id="approval-chip" class="chip" aria-label="Tool access level">access: ask</button>
         <span id="file-chip" class="chip ghost hidden" aria-label="Active editor file"></span>
         <span id="ctx-chip" class="chip ghost hidden"></span>
         <span id="stats-chip" class="chip ghost hidden" aria-label="Session tokens and cost"></span>

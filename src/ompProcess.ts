@@ -14,7 +14,7 @@ export interface OmpStartOptions {
   cwd: string;
   /** Full environment for the child process. */
   env: NodeJS.ProcessEnv;
-  /** ompcode.approvalMode — passed as --approval-mode when not "always-ask". */
+  /** ompcode.approvalMode — always passed as --approval-mode (see start()). */
   approvalMode: string;
   /** Extra CLI flags appended verbatim (used by the model prober). */
   extraArgs?: string[];
@@ -94,7 +94,10 @@ export class OmpProcess {
     this.chunks.clear();
 
     const args = ["--mode", "rpc-ui", "--cwd", opts.cwd];
-    if (opts.approvalMode && opts.approvalMode !== "always-ask") {
+    // Always passed, including "always-ask". omp's own default for
+    // `tools.approvalMode` is `yolo`, so omitting the flag does not mean
+    // "ask" — it silently auto-approves reads, writes and shell commands.
+    if (opts.approvalMode) {
       args.push("--approval-mode", opts.approvalMode);
     }
     if (opts.extraArgs?.length) {

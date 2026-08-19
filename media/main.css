@@ -1127,6 +1127,93 @@ button:focus-visible,
   text-decoration: line-through;
 }
 
+/* Two-line choice row: the value, and what it actually does. */
+.menu-choice {
+  display: block;
+  line-height: 1.35;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.menu-choice-head {
+  font-weight: 500;
+}
+
+.menu-choice-hint {
+  margin-top: 1px;
+  font-size: .85em;
+  opacity: .65;
+  white-space: normal;
+}
+
+.menu-choice.menu-choice-on .menu-choice-head {
+  color: var(--accent);
+}
+
+/* Menus carrying hints need more room than the model list. */
+.menu:has(.menu-choice) {
+  min-width: 260px;
+  max-width: min(340px, calc(100vw - 24px));
+}
+
+/* ------------------------------------------------------------------ */
+/* Tool approval card                                                  */
+/* ------------------------------------------------------------------ */
+
+.approval-card {
+  border-color: var(--vscode-inputValidation-warningBorder, #d98b3a);
+}
+
+.approval-card .approval-body {
+  white-space: pre-wrap;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.approval-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.approval-btn:hover {
+  border-color: var(--accent);
+}
+
+.approval-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.approval-card.approval-done {
+  border-color: var(--border);
+  opacity: .72;
+}
+
+.approval-verdict {
+  font-size: 12px;
+  opacity: .8;
+}
+
+/* Full tool access — the one chip state that runs shell commands unattended. */
+.chip.chip-warn {
+  border-color: var(--vscode-inputValidation-warningBorder, #d98b3a);
+  color: var(--vscode-editorWarning-foreground, #d98b3a);
+}
+
 /* ------------------------------------------------------------------ */
 /* Sign-in card (device code)                                          */
 /* ------------------------------------------------------------------ */
