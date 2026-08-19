@@ -240,3 +240,55 @@ test("extensionOf lower-cases and handles bare names", () => {
   assert.equal(extensionOf("C:\\bin\\omp.exe"), ".exe");
   assert.equal(extensionOf("C:\\my.dir\\omp"), "");
 });
+
+test("a PATHEXT hit Windows cannot execute is reported, not spawned", () => {
+  const target = resolveLaunch({
+    file: "omp",
+    args: ARGS,
+    platform: "win32",
+    env: { ...WIN_ENV, PATHEXT: ".EXE;.VBS;.CMD" },
+    exists: only("C:\\Users\\dev\\.bun\\bin\\omp.vbs"),
+  });
+  assert.match(target.problem ?? "", /\.vbs file, which Windows cannot start/);
+  assert.equal(target.windowsVerbatimArguments, undefined);
+});
+
+test("an explicitly configured extensionless file is spawned directly", () => {
+  const target = resolveLaunch({
+    file: "C:\\tools\\omp",
+    args: ARGS,
+    platform: "win32",
+    env: WIN_ENV,
+    exists: only("C:\\tools\\omp"),
+  });
+  assert.equal(target.file, "C:\\tools\\omp");
+  assert.equal(target.problem, undefined);
+});
+
+test("the system directories are searched ahead of PATH", () => {
+  const env: NodeJS.ProcessEnv = { ...WIN_ENV, SystemRoot: "C:\\Windows" };
+  assert.equal(
+    resolveWindowsExecutable(
+      "omp",
+      env,
+      only("C:\\Windows\\system32\\omp.exe", "C:\\Users\\dev\\.bun\\bin\\omp.exe"),
+    ),
+    "C:\\Windows\\system32\\omp.exe",
+  );
+  // …and the Windows directory itself sits between system32 and PATH.
+  assert.equal(
+    resolveWindowsExecutable(
+      "omp",
+      env,
+      only("C:\\Windows\\omp.exe", "C:\\Users\\dev\\.bun\\bin\\omp.exe"),
+    ),
+    "C:\\Windows\\omp.exe",
+  );
+});
+
+test("no SystemRoot means no system leg, not a crash", () => {
+  assert.equal(
+    resolveWindowsExecutable("omp", { PATH: "C:\\bin", PATHEXT: ".EXE" }, only("C:\\bin\\omp.exe")),
+    "C:\\bin\\omp.exe",
+  );
+});

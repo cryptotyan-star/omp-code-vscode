@@ -24,6 +24,13 @@ import * as fs from "node:fs";
 const BATCH_EXTENSIONS = new Set([".cmd", ".bat"]);
 /** PowerShell wrappers: cmd.exe cannot run these at all. */
 const POWERSHELL_EXTENSIONS = new Set([".ps1"]);
+/**
+ * What CreateProcess can start on its own. A real PATHEXT also lists `.vbs`,
+ * `.js`, `.wsf`, `.msc` and friends, none of which are PE images — resolving
+ * to one of those has to be reported, not handed to spawn. The empty string
+ * covers an explicitly configured path to an extensionless file.
+ */
+const DIRECT_EXTENSIONS = new Set([".exe", ".com", ""]);
 
 const DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
 
@@ -79,6 +86,12 @@ function pathDirectories(env: NodeJS.ProcessEnv): string[] {
     .filter((dir) => dir.length > 0);
 }
 
+/** The system legs of the CreateProcess search, ahead of PATH. */
+function systemDirectories(env: NodeJS.ProcessEnv): string[] {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir;
+  return root ? [path.win32.join(root, "system32"), root] : [];
+}
+
 function defaultExists(candidate: string): boolean {
   try {
     return fs.statSync(candidate).isFile();
@@ -91,11 +104,19 @@ function defaultExists(candidate: string): boolean {
  * Find the file Windows would actually execute for `name`, so the caller can
  * tell a real executable from a batch shim before spawning.
  *
- * Mirrors the search order of `CreateProcess`: every PATH directory in turn,
- * each tried with every PATHEXT extension. The current directory is
- * deliberately not searched — an `omp.cmd` dropped in a workspace must not
- * take precedence over the installed one. Returns undefined when nothing
- * matches, which leaves the caller's existing "cannot find omp" error intact.
+ * Follows the `CreateProcess` order for the legs that can plausibly hold omp:
+ * the system directories, then every PATH directory, each tried with every
+ * PATHEXT extension. Two legs are skipped on purpose, so this is a close
+ * mirror rather than an exact one:
+ *
+ * - the current directory (and the empty PATH entries that mean it) — an
+ *   `omp.cmd` dropped into a workspace must never outrank the installed one;
+ * - the calling application's directory, which here is the VS Code install.
+ *
+ * A miss in a skipped leg only costs the cmd.exe reroute: the caller falls
+ * back to spawning the configured name, which still works for a real
+ * executable. Returns undefined when nothing matches, which leaves the
+ * caller's existing "cannot find omp" error intact.
  */
 export function resolveWindowsExecutable(
   name: string,
@@ -111,7 +132,9 @@ export function resolveWindowsExecutable(
     name.includes("/") || name.includes("\\") || path.win32.isAbsolute(name);
   const bases = hasDirectory
     ? [name]
-    : pathDirectories(env).map((dir) => path.win32.join(dir, name));
+    : [...systemDirectories(env), ...pathDirectories(env)].map((dir) =>
+        path.win32.join(dir, name),
+      );
 
   for (const base of bases) {
     for (const ext of extensions) {
@@ -178,6 +201,11 @@ export function buildCmdCommandLine(
       };
     }
   }
+  // `%VAR%` still expands inside the quotes — quoting cannot stop that. It is
+  // outside the threat model: every argument here is either a constant, a
+  // path this extension generated under the OS temp directory, or the
+  // workspace path, and a workspace would have to be named after a defined
+  // variable whose value itself carried a metacharacter for it to matter.
   return { line: [file, ...args].map(quoteWindowsArg).join(" ") };
 }
 
@@ -202,17 +230,19 @@ export function resolveLaunch(opts: ResolveLaunchOptions): LaunchTarget {
   }
 
   const ext = extensionOf(resolved);
-  if (POWERSHELL_EXTENSIONS.has(ext)) {
+  if (DIRECT_EXTENSIONS.has(ext)) {
+    return { file: resolved, args: opts.args };
+  }
+  if (!BATCH_EXTENSIONS.has(ext)) {
     return {
       file: opts.file,
       args: opts.args,
-      problem:
-        `"${resolved}" is a PowerShell wrapper, which cannot be started directly. ` +
-        'Set "ompcode.ompPath" to the omp.cmd or omp.exe next to it.',
+      problem: POWERSHELL_EXTENSIONS.has(ext)
+        ? `"${resolved}" is a PowerShell wrapper, which cannot be started directly. ` +
+          'Set "ompcode.ompPath" to the omp.cmd or omp.exe next to it.'
+        : `"${resolved}" is a ${ext} file, which Windows cannot start as a process. ` +
+          'Set "ompcode.ompPath" to the omp.exe or omp.cmd to run.',
     };
-  }
-  if (!BATCH_EXTENSIONS.has(ext)) {
-    return { file: resolved, args: opts.args };
   }
 
   const built = buildCmdCommandLine(resolved, opts.args);
