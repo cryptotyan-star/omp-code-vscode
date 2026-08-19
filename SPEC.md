@@ -13,7 +13,7 @@ Dependency: `yaml` (bundled). devDeps: `typescript`, `esbuild`, `@types/vscode` 
 ```
 package.json  tsconfig.json  esbuild.mjs  .vscodeignore  README.md  media/icon.svg   ← builder A
 src/extension.ts  src/ompProcess.ts  src/chatViewProvider.ts  src/modelsSync.ts
-src/attachments.ts                                                                    ← builder B
+src/attachments.ts  src/winLaunch.ts                                                  ← builder B
 media/main.js                                                                         ← builder C
 media/main.css                                                                        ← builder D
 ```
@@ -95,6 +95,34 @@ State (get_state → data): `{model?, thinkingLevel, isStreaming, sessionId, ses
 - `onFrame(cb)` — all non-response frames.
 - `onExit(cb)` — code/signal; host shows status + restart button in webview (`proc-status` msg).
 - `stop()` — kill.
+
+### Launching omp on Windows (src/winLaunch.ts)
+
+`resolveLaunch({file, args, env})` decides what `spawn` actually receives.
+
+- **macOS / Linux** — pass-through, byte for byte.
+- **Windows** — the configured `ompcode.ompPath` is resolved the way
+  `CreateProcess` would (every `PATH` directory in turn, each tried with every
+  `PATHEXT` extension; the current directory is deliberately skipped). A real
+  `.exe` is spawned directly at its resolved path.
+- A `.cmd` / `.bat` shim (what a global install can leave behind) is not a PE
+  image, so `CreateProcess` cannot run it. Those go through
+  `cmd.exe /d /s /c "<line>"` with `windowsVerbatimArguments: true`.
+- The command line is quoted by `winLaunch`, **not** by Node. `shell: true`
+  would concatenate the argv with plain spaces: our vector carries the
+  workspace path in `--cwd`, so a directory name with a space would break the
+  launch and one containing `&` or `|` would execute whatever follows it.
+  Every argument is quoted unconditionally — MSVCRT backslash rules for the
+  child, and quotes are also what makes cmd treat `&`, `|`, `<`, `>` and `^`
+  as literals.
+- An argument containing a `"` is refused rather than escaped (the child's
+  `\"` and cmd's `^"` conventions cannot both hold), as is a `.ps1` wrapper,
+  which cmd cannot run at all. Both come back as `problem` on the launch
+  target; `OmpProcess.start` reports it through `onError` instead of spawning,
+  so the webview shows the reason. A name that resolves to nothing passes
+  through unchanged, keeping the existing ENOENT message.
+
+Windows ARM is not supported — omp has no `win32-arm64` build.
 
 ## src/chatViewProvider.ts + src/extension.ts (builder B)
 

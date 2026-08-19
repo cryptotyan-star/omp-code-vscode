@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { resolveLaunch } from "./winLaunch.ts";
 
 /** A single NDJSON frame received from (or sent to) the omp CLI. */
 export interface OmpFrame {
@@ -104,10 +105,29 @@ export class OmpProcess {
       args.push(...opts.extraArgs);
     }
 
-    const proc = spawn(opts.ompPath, args, {
+    // On Windows a global install can be a batch shim that CreateProcess
+    // refuses to run; resolveLaunch reroutes those through cmd.exe and leaves
+    // every other platform alone.
+    const target = resolveLaunch({ file: opts.ompPath, args, env: opts.env });
+    if (target.problem) {
+      const err: NodeJS.ErrnoException = new Error(target.problem);
+      err.code = "EINVAL";
+      // Reported like a spawn failure so the host's existing error path shows
+      // it; spawn errors are async, so this one is too.
+      queueMicrotask(() => {
+        this.failAllPending(new Error(target.problem as string));
+        for (const cb of this.errorHandlers) {
+          cb(err);
+        }
+      });
+      return;
+    }
+
+    const proc = spawn(target.file, target.args, {
       cwd: opts.cwd,
       env: opts.env,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
     });
     this.proc = proc;
 

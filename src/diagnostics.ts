@@ -2,6 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { OmpProcess } from "./ompProcess";
+import { resolveLaunch, resolveWindowsExecutable } from "./winLaunch.ts";
 import type { ProbeResults } from "./probe";
 
 /**
@@ -27,7 +28,16 @@ const START_TIMEOUT_MS = 60_000;
 function runVersion(ompPath: string, env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve) => {
     let out = "";
-    const child = spawn(ompPath, ["--version"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const target = resolveLaunch({ file: ompPath, args: ["--version"], env });
+    if (target.problem) {
+      resolve(`FAILED to spawn: ${target.problem}`);
+      return;
+    }
+    const child = spawn(target.file, target.args, {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
+    });
     const done = (text: string): void => resolve(text.trim() || "(no output)");
     child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
     child.stderr?.on("data", (d: Buffer) => (out += d.toString()));
@@ -47,6 +57,10 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<string> {
   add("# OMP Code diagnostics");
   add();
   add(`- omp path setting: \`${input.ompPath}\``);
+  if (process.platform === "win32") {
+    const resolved = resolveWindowsExecutable(input.ompPath, input.env);
+    add(`- resolved launcher: \`${resolved ?? "(not found on PATH)"}\``);
+  }
   add(`- workspace cwd: \`${input.cwd}\``);
   add(`- PATH contains ~/.bun/bin: ${String(input.env.PATH ?? "").includes(path.join(os.homedir(), ".bun", "bin"))}`);
   add(
@@ -64,8 +78,10 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<string> {
   add("## Agent handshake");
   const proc = new OmpProcess();
   let ready: (() => void) | undefined;
+  let failed: ((err: Error) => void) | undefined;
   const readyPromise = new Promise<void>((resolve, reject) => {
     ready = resolve;
+    failed = reject;
     setTimeout(() => reject(new Error(`no "ready" frame within ${START_TIMEOUT_MS / 1000}s`)), START_TIMEOUT_MS);
   });
   let stderr = "";
@@ -76,6 +92,12 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<string> {
     if (frame.type === "ready") {
       ready?.();
     }
+  });
+  // Without this the report waits out the full timeout and then blames a
+  // missing "ready" frame, hiding the actual reason (a missing binary, or a
+  // launcher winLaunch refused).
+  proc.onError((err) => {
+    failed?.(new Error(err.message));
   });
 
   try {

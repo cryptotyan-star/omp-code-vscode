@@ -18,6 +18,10 @@ Claude Code-style chat in the VS Code sidebar, powered by the [`omp`](https://ww
 
    Расширение ищет `omp` в `PATH` (`~/.bun/bin` добавляется автоматически). Свой путь к бинарнику — настройка `ompcode.ompPath`.
 
+   On Windows a `.cmd` shim is started through `cmd.exe` automatically; point `ompcode.ompPath` at `omp.exe` or `omp.cmd` if the install is somewhere off `PATH`. Windows ARM is not supported — omp has no build for it.
+
+   На Windows `.cmd`-обёртка запускается через `cmd.exe` автоматически; если установка лежит вне `PATH`, укажите `ompcode.ompPath` на `omp.exe` или `omp.cmd`. Windows ARM не поддерживается — сборки omp под него нет.
+
 2. Install the extension (`.vsix`) / Установите расширение (`.vsix`):
 
    ```bash

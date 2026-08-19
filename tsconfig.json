@@ -13,6 +13,9 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
+    // src modules are also loaded directly by node --experimental-strip-types
+    // in the tests, where the ESM resolver demands an explicit extension.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true
