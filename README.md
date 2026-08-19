@@ -124,11 +124,18 @@ You can also edit `models.yml` directly: **OMP Code: Open models.yml (Custom Pro
 - **Уведомления**: ход длиннее 15 с при нефокусированном окне завершается нативным уведомлением.
 - **История**: в панели истории есть фильтр по названию, превью, папке и модели.
 
+### Language / Язык
+
+The chat interface ships in English and Russian. `ompcode.language` (`auto` by default) is separate from the VS Code display language, so an English editor can hold a Russian chat — no Language Pack needed. Command titles and setting descriptions are read by VS Code before the extension loads, so those follow the editor's own language.
+
+Интерфейс чата есть на английском и русском. Настройка `ompcode.language` (по умолчанию `auto`) не зависит от языка интерфейса VS Code — редактор может остаться английским, а чат быть русским, Language Pack не нужен. Названия команд и описания настроек VS Code читает до загрузки расширения, поэтому они следуют языку самого редактора.
+
 ## Settings / Настройки
 
 | Setting | Default | Description |
 | --- | --- | --- |
 | `ompcode.ompPath` | `omp` | Path to the omp binary / путь к бинарнику omp |
+| `ompcode.language` | `auto` | Chat interface language / язык интерфейса чата: `auto`, `en`, `ru` |
 | `ompcode.customProviders` | `{}` | Providers merged into models.yml / провайдеры для models.yml |
 | `ompcode.defaultModel` | `""` | `provider/modelId` selected on start / модель по умолчанию |
 | `ompcode.thinkingLevel` | `auto` | off…max, auto / уровень размышлений |

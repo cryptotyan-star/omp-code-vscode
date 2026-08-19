@@ -6,6 +6,7 @@ import { MAX_SNIPPET_CHARS, type Attachment } from "./attachments";
 import { ChatViewProvider } from "./chatViewProvider";
 import { OmpSession, type DiffStore } from "./ompSession";
 import { KEYED_PROVIDERS } from "./providers";
+import { loadBundle, resolveLanguage, setBundle, t } from "./l10n.ts";
 
 const MODELS_YML_TEMPLATE = `# ~/.omp/agent/models.yml — custom model providers for the omp CLI.
 #
@@ -31,8 +32,20 @@ function modelsYmlPath(): string {
   return path.join(os.homedir(), ".omp", "agent", "models.yml");
 }
 
+/**
+ * Pick the interface language and install its bundle. Runs before anything
+ * renders, and again whenever `ompcode.language` changes.
+ */
+function applyLanguage(context: vscode.ExtensionContext, output: vscode.OutputChannel): void {
+  const setting = vscode.workspace.getConfiguration("ompcode").get<string>("language", "auto");
+  const language = resolveLanguage(setting, vscode.env.language);
+  setBundle(language, loadBundle(context.extensionPath, language));
+  output.appendLine(`[omp] interface language: ${language} (setting "${setting}")`);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("OMP Code");
+  applyLanguage(context, output);
   output.appendLine("[omp] extension activated");
 
   /** Chat panels currently open in the editor area, oldest first. */
@@ -42,7 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBar.command = "ompcode.openChat";
   statusBar.text = "$(sparkle) OMP Code";
-  statusBar.tooltip = "OMP Code — open chat";
+  statusBar.tooltip = t("OMP Code — open chat");
   statusBar.show();
 
   function onSessionState(state: unknown): void {
@@ -59,7 +72,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // of a session is noise wherever it is shown. The chat warns once the
     // window actually starts to fill (see noteContextFill in media/main.mjs).
     statusBar.text = name ? `$(sparkle) ${name}` : "$(sparkle) OMP Code";
-    statusBar.tooltip = "OMP Code — open chat";
+    statusBar.tooltip = t("OMP Code — open chat");
   }
 
   /**
@@ -82,7 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
     let cwd: string | undefined;
     if (folders.length > 1) {
       const picked = await vscode.window.showWorkspaceFolderPick({
-        placeHolder: "Which folder should this chat's agent work in?",
+        placeHolder: t("Which folder should this chat's agent work in?"),
       });
       if (!picked) {
         return undefined; // cancelled — no tab without a folder
@@ -173,8 +186,11 @@ export function activate(context: vscode.ExtensionContext): void {
     envVar: string,
   ): Promise<void> {
     const value = await vscode.window.showInputBox({
-      title: `OMP Code: ${label} API Key`,
-      prompt: `Stored in VS Code Secret Storage and passed to the omp agent as ${envVar}. Leave empty to clear.`,
+      title: t("OMP Code: {0} API Key", label),
+      prompt: t(
+        "Stored in VS Code Secret Storage and passed to the omp agent as {0}. Leave empty to clear.",
+        envVar,
+      ),
       password: true,
       ignoreFocusOut: true,
       placeHolder,
@@ -188,11 +204,14 @@ export function activate(context: vscode.ExtensionContext): void {
     } else {
       await context.secrets.delete(secretKey);
     }
+    const restart = t("Restart Agent");
     const action = await vscode.window.showInformationMessage(
-      `${label} API key ${trimmed ? "saved" : "cleared"}. Restart the agent to apply it.`,
-      "Restart Agent",
+      trimmed
+        ? t("{0} API key saved. Restart the agent to apply it.", label)
+        : t("{0} API key cleared. Restart the agent to apply it.", label),
+      restart,
     );
-    if (action === "Restart Agent") {
+    if (action === restart) {
       await restartAllSessions();
     }
   }
@@ -214,6 +233,13 @@ export function activate(context: vscode.ExtensionContext): void {
         output.appendLine("[omp] palette changed — updating webviews");
         OmpSession.forEachActive((session) => session.pushTheme());
         return;
+      }
+      // The webview bundle is baked into the HTML at build time, so a language
+      // change has to rebuild it; the transcript in the DOM is lost either
+      // way because the sessions restart below.
+      if (e.affectsConfiguration("ompcode.language")) {
+        applyLanguage(context, output);
+        OmpSession.forEachActive((session) => session.reloadHtml());
       }
       if (e.affectsConfiguration("ompcode")) {
         output.appendLine("[omp] configuration changed — restarting all sessions");
@@ -252,16 +278,20 @@ export function activate(context: vscode.ExtensionContext): void {
       // A stale key is worse than no key: omp lists the provider's whole model
       // range and every one of them answers 401.
       const picked = await vscode.window.showQuickPick(
-        KEYED_PROVIDERS.map((p) => ({ label: `${p.label} API key`, secret: p.secret })),
-        { title: "OMP Code: Clear stored API key", placeHolder: "Subscription sign-ins are not affected" },
+        KEYED_PROVIDERS.map((p) => ({ label: t("{0} API key", p.label), secret: p.secret })),
+        {
+          title: t("OMP Code: Clear stored API key"),
+          placeHolder: t("Subscription sign-ins are not affected"),
+        },
       );
       if (!picked) return;
       await context.secrets.delete(picked.secret);
+      const restart = t("Restart Agent");
       const action = await vscode.window.showInformationMessage(
-        `${picked.label} cleared. Restart the agent to apply it.`,
-        "Restart Agent",
+        t("{0} cleared. Restart the agent to apply it.", picked.label),
+        restart,
       );
-      if (action === "Restart Agent") {
+      if (action === restart) {
         await restartAllSessions();
       }
     }),
@@ -272,24 +302,28 @@ export function activate(context: vscode.ExtensionContext): void {
       const providers = cfg.get<Record<string, unknown>>("customProviders", {});
       const names = Object.keys(providers).sort();
       if (!names.length) {
+        const openModels = t("Open models.yml");
         const action = await vscode.window.showInformationMessage(
-          "No custom providers configured. Add one under \"ompcode.customProviders\" first.",
-          "Open models.yml",
+          t('No custom providers configured. Add one under "ompcode.customProviders" first.'),
+          openModels,
         );
-        if (action === "Open models.yml") {
+        if (action === openModels) {
           await vscode.commands.executeCommand("ompcode.openModelsConfig");
         }
         return;
       }
       const name = await vscode.window.showQuickPick(names, {
-        title: "OMP Code: Provider API key",
-        placeHolder: "Select a custom provider",
+        title: t("OMP Code: Provider API key"),
+        placeHolder: t("Select a custom provider"),
       });
       if (!name) return;
       const secretKey = `ompcode.providerKey.${name}`;
       const value = await vscode.window.showInputBox({
-        title: `OMP Code: ${name} API key`,
-        prompt: `Stored in Secret Storage and injected into the "${name}" provider in models.yml. Leave empty to clear.`,
+        title: t("OMP Code: {0} API key", name),
+        prompt: t(
+          'Stored in Secret Storage and injected into the "{0}" provider in models.yml. Leave empty to clear.',
+          name,
+        ),
         password: true,
         ignoreFocusOut: true,
         placeHolder: "sk-…",
@@ -301,11 +335,14 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         await context.secrets.delete(secretKey);
       }
+      const restart = t("Restart Agent");
       const action = await vscode.window.showInformationMessage(
-        `${name} API key ${trimmed ? "saved" : "cleared"}. Restart the agent to apply it.`,
-        "Restart Agent",
+        trimmed
+          ? t("{0} API key saved. Restart the agent to apply it.", name)
+          : t("{0} API key cleared. Restart the agent to apply it.", name),
+        restart,
       );
-      if (action === "Restart Agent") {
+      if (action === restart) {
         await restartAllSessions();
       }
     }),
@@ -327,7 +364,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ompcode.exportTranscript", async () => {
       const session = OmpSession.anyActive();
       if (!session) {
-        await vscode.window.showInformationMessage("OMP Code: open a chat first.");
+        await vscode.window.showInformationMessage(t("OMP Code: open a chat first."));
         return;
       }
       await session.exportTranscript();

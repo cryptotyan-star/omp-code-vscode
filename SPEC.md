@@ -13,7 +13,8 @@ Dependency: `yaml` (bundled). devDeps: `typescript`, `esbuild`, `@types/vscode` 
 ```
 package.json  tsconfig.json  esbuild.mjs  .vscodeignore  README.md  media/icon.svg   ← builder A
 src/extension.ts  src/ompProcess.ts  src/chatViewProvider.ts  src/modelsSync.ts
-src/attachments.ts  src/winLaunch.ts                                                  ← builder B
+src/attachments.ts  src/winLaunch.ts  src/l10n.ts                                     ← builder B
+media/l10n.mjs  l10n/ru.json  package.nls.json  package.nls.ru.json                   ← i18n
 media/main.js                                                                         ← builder C
 media/main.css                                                                        ← builder D
 ```
@@ -95,6 +96,35 @@ State (get_state → data): `{model?, thinkingLevel, isStreaming, sessionId, ses
 - `onFrame(cb)` — all non-response frames.
 - `onExit(cb)` — code/signal; host shows status + restart button in webview (`proc-status` msg).
 - `stop()` — kill.
+
+### Interface language (src/l10n.ts, media/l10n.mjs, l10n/, package.nls*.json)
+
+The English source text is the translation key: `t("Working…")`. A missing
+entry falls back to it, so an untranslated string reads correctly instead of
+showing a key, and adding one costs nothing until someone translates it.
+Arguments are positional — `t("Retrying ({0}/{1})", n, max)`.
+
+- **Which language.** `ompcode.language` (`auto` | `en` | `ru`), not
+  `vscode.l10n`. VS Code's own l10n can only follow the editor's display
+  language, which needs the matching Language Pack and switches the whole
+  editor; several users run an English VS Code and want a Russian chat.
+  `auto` defers to `vscode.env.language`, matching on the primary subtag.
+- **Manifest strings are the exception.** Command titles and setting
+  descriptions are `%key%` placeholders resolved from `package.nls.json` /
+  `package.nls.ru.json` by VS Code itself, before the extension is loaded, so
+  they follow the display language and cannot honour the setting.
+- **The webview.** `getHtml` serialises the active bundle into a
+  `<script type="application/json" id="l10n-bundle">` tag (with `<` escaped so
+  a translation cannot close it early), and `media/l10n.mjs` parses it at
+  module load. The first paint is already translated — nothing waits on a
+  message. That also means a language change cannot be pushed: `reloadHtml()`
+  rebuilds the markup, and `extension.ts` calls it before the sessions
+  restart.
+- **Bundles stay honest by test.** `test/l10n.test.ts` scans the sources for
+  `t("…")` calls and fails on a string with no Russian translation, a
+  translation whose source string is gone, or a mismatch in `{0}`
+  placeholders. The same test checks every `%key%` in the manifest resolves in
+  both nls bundles.
 
 ### Launching omp on Windows (src/winLaunch.ts)
 

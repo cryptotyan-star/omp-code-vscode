@@ -1,8 +1,8 @@
 {
   "name": "omp-code",
   "displayName": "OMP Code",
-  "description": "Claude Code-style chat GUI in the sidebar, backed by the omp (oh-my-pi) CLI over RPC. Supports custom model providers and the Anthropic Cloud API.",
-  "version": "0.4.0",
+  "description": "%extension.description%",
+  "version": "0.5.0",
   "publisher": "local",
   "author": "OMP Code contributors",
   "license": "MIT",
@@ -41,14 +41,14 @@
         {
           "type": "webview",
           "id": "ompcode.chat",
-          "name": "Chat"
+          "name": "%view.chat.name%"
         }
       ]
     },
     "commands": [
       {
         "command": "ompcode.openChat",
-        "title": "OMP Code: Open Chat (Editor)",
+        "title": "%command.openChat.title%",
         "icon": {
           "light": "media/icon-light.svg",
           "dark": "media/icon-dark.svg"
@@ -56,65 +56,65 @@
       },
       {
         "command": "ompcode.showHistory",
-        "title": "OMP Code: Session History"
+        "title": "%command.showHistory.title%"
       },
       {
         "command": "ompcode.newSession",
-        "title": "OMP Code: New Chat Tab",
+        "title": "%command.newSession.title%",
         "icon": "$(add)"
       },
       {
         "command": "ompcode.setAnthropicKey",
-        "title": "OMP Code: Set Anthropic API Key"
+        "title": "%command.setAnthropicKey.title%"
       },
       {
         "command": "ompcode.setKimiKey",
-        "title": "OMP Code: Set Kimi (Moonshot) API Key"
+        "title": "%command.setKimiKey.title%"
       },
       {
         "command": "ompcode.setGlmKey",
-        "title": "OMP Code: Set GLM (Zhipu BigModel) API Key"
+        "title": "%command.setGlmKey.title%"
       },
       {
         "command": "ompcode.setQwenKey",
-        "title": "OMP Code: Set Qwen (Alibaba Coding Plan) API Key"
+        "title": "%command.setQwenKey.title%"
       },
       {
         "command": "ompcode.loginClaude",
-        "title": "OMP Code: Sign in with Claude (Subscription)"
+        "title": "%command.loginClaude.title%"
       },
       {
         "command": "ompcode.loginKimi",
-        "title": "OMP Code: Sign in with Kimi Code (Subscription)"
+        "title": "%command.loginKimi.title%"
       },
       {
         "command": "ompcode.diagnostics",
-        "title": "OMP Code: Run Diagnostics"
+        "title": "%command.diagnostics.title%"
       },
       {
         "command": "ompcode.clearKeys",
-        "title": "OMP Code: Clear Stored API Key"
+        "title": "%command.clearKeys.title%"
       },
       {
         "command": "ompcode.setProviderKey",
-        "title": "OMP Code: Set Custom Provider API Key"
+        "title": "%command.setProviderKey.title%"
       },
       {
         "command": "ompcode.openModelsConfig",
-        "title": "OMP Code: Open models.yml (Custom Providers)"
+        "title": "%command.openModelsConfig.title%"
       },
       {
         "command": "ompcode.restart",
-        "title": "OMP Code: Restart Agent"
+        "title": "%command.restart.title%"
       },
       {
         "command": "ompcode.addSelectionToChat",
-        "title": "OMP Code: Add Selection to Chat",
+        "title": "%command.addSelectionToChat.title%",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "ompcode.exportTranscript",
-        "title": "OMP Code: Export Transcript as Markdown"
+        "title": "%command.exportTranscript.title%"
       }
     ],
     "menus": {
@@ -163,32 +163,47 @@
         "ompcode.ompPath": {
           "type": "string",
           "default": "omp",
-          "description": "Path to the omp CLI binary (oh-my-pi). Defaults to `omp` resolved via PATH (~/.bun/bin is added automatically)."
+          "description": "%config.ompPath.description%"
+        },
+        "ompcode.language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "en",
+            "ru"
+          ],
+          "enumDescriptions": [
+            "%config.language.enumDescriptions.0%",
+            "%config.language.enumDescriptions.1%",
+            "%config.language.enumDescriptions.2%"
+          ],
+          "default": "auto",
+          "description": "%config.language.description%"
         },
         "ompcode.customProviders": {
           "type": "object",
           "default": {},
-          "markdownDescription": "Custom model providers, same shape as the `providers:` map in `~/.omp/agent/models.yml`. Merged into models.yml before each agent start. Example: `{\"akemi\": {\"baseUrl\": \"http://host:8000/v1\", \"api\": \"openai-completions\", \"apiKey\": \"sk-...\", \"models\": [{\"id\": \"akemi-1\", \"name\": \"Akemi\", \"contextWindow\": 128000, \"maxTokens\": 32000}]}}`"
+          "markdownDescription": "%config.customProviders.markdownDescription%"
         },
         "ompcode.defaultModel": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Model to select after the agent starts, as `provider/modelId` (fuzzy matched), e.g. `akemi/akemi-1` or `anthropic/claude-sonnet-4-5`. Empty = keep the agent's default."
+          "markdownDescription": "%config.defaultModel.markdownDescription%"
         },
         "ompcode.verifyModels": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Before offering a model, send it one throwaway request (`ping`, thinking off, no tools) through a separate session-less agent and keep only the models that answer. Hides models whose credentials are stale or whose subscription does not cover them. Verdicts are cached for 12 hours; refresh them from the model picker's \"Re-check subscriptions\"."
+          "markdownDescription": "%config.verifyModels.markdownDescription%"
         },
         "ompcode.hideStartupNotices": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Hide the agent's internal startup notices (`xd://: mounted …`, `inspect_image is now hidden …`). Warnings and errors are always shown; suppressed notices still go to the \"OMP Code\" output channel."
+          "markdownDescription": "%config.hideStartupNotices.markdownDescription%"
         },
         "ompcode.resumeLastSession": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "When a new chat opens, resume the most recent omp session (across all workspaces) instead of starting blank."
+          "markdownDescription": "%config.resumeLastSession.markdownDescription%"
         },
         "ompcode.thinkingLevel": {
           "type": "string",
@@ -203,7 +218,7 @@
             "auto"
           ],
           "default": "auto",
-          "description": "Thinking (reasoning) level applied after the agent starts."
+          "description": "%config.thinkingLevel.description%"
         },
         "ompcode.approvalMode": {
           "type": "string",
@@ -214,11 +229,11 @@
           ],
           "default": "always-ask",
           "enumDescriptions": [
-            "Auto-approve reads; ask before writing files or running commands.",
-            "Auto-approve reads and file writes; ask before running commands.",
-            "Auto-approve everything, including shell commands (dangerous)."
+            "%config.approvalMode.enumDescriptions.0%",
+            "%config.approvalMode.enumDescriptions.1%",
+            "%config.approvalMode.enumDescriptions.2%"
           ],
-          "markdownDescription": "Tool approval tier, passed to omp as `--approval-mode`. Also settable from the `access:` chip in the chat composer.\n\nNote: approving a single `task` call hands its subagent the same tier, so an approved task can run shell commands without asking again."
+          "markdownDescription": "%config.approvalMode.markdownDescription%"
         },
         "ompcode.theme": {
           "type": "string",
@@ -230,24 +245,24 @@
             "magenta"
           ],
           "enumDescriptions": [
-            "Indigo/violet accent (#8B7BF7) — default.",
-            "Coral accent (#D97757), the original Claude Code palette.",
-            "Emerald/teal accent (#2DD4A7).",
-            "Amber accent (#E0A458).",
-            "Magenta accent (#E0559E)."
+            "%config.theme.enumDescriptions.0%",
+            "%config.theme.enumDescriptions.1%",
+            "%config.theme.enumDescriptions.2%",
+            "%config.theme.enumDescriptions.3%",
+            "%config.theme.enumDescriptions.4%"
           ],
           "default": "violet",
-          "description": "Accent palette of the chat panel. Applied live, without restarting the agent."
+          "description": "%config.theme.description%"
         },
         "ompcode.accentColor": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Override the palette accent with a custom CSS color, e.g. `#8B7BF7` or `hsl(250 85% 72%)`. Empty = use `ompcode.theme`."
+          "markdownDescription": "%config.accentColor.markdownDescription%"
         },
         "ompcode.modelProfiles": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Per-model behaviour profiles, layered on top of the built-in ones. Each entry is `{ family, match: { id?, provider?, host? }, contextFile?, badge?, runtime?, spawn? }`; `match.id` is a regular expression **as a string**. Your rows always win over the built-ins, whatever their specificity.\n\nOnly policy belongs here — omp already resolves the thinking dialect, the effort ladder, stream timeouts and tool-schema shape per provider, and overriding those makes things worse, not better.\n\nExample — never let one model run shell commands unattended:\n\n```json\n[{ \"family\": \"qwen\", \"match\": { \"id\": \"qwen\" },\n   \"spawn\": { \"overlay\": { \"tools.approval\": { \"bash\": \"prompt\" } } } }]\n```"
+          "markdownDescription": "%config.modelProfiles.markdownDescription%"
         }
       }
     }

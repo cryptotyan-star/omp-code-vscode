@@ -27,6 +27,7 @@ import {
 } from "./probe";
 import { KEYED_PROVIDERS } from "./providers";
 import { needsManualLoad, readInstructionFile } from "./instructionFiles";
+import { currentBundle, currentLanguage, t } from "./l10n.ts";
 import { overlayArgs, writeAppendPrompt, writeOverlay } from "./profileOverlay";
 import {
   isValidProfileRow,
@@ -190,6 +191,20 @@ export class OmpSession implements vscode.Disposable {
     });
   }
 
+  /**
+   * Rebuild the webview HTML in place. The translation bundle is baked into
+   * the markup, so a language change cannot be pushed as a message — the
+   * skeleton itself has to be regenerated.
+   */
+  reloadHtml(): void {
+    const webview = this.webview;
+    if (!webview) {
+      return;
+    }
+    this.webviewReady = false;
+    webview.html = this.getHtml(webview);
+  }
+
   detach(): void {
     this.messageSub?.dispose();
     this.messageSub = undefined;
@@ -282,8 +297,10 @@ export class OmpSession implements vscode.Disposable {
           type: "notice",
           level: "info",
           message:
-            `Agent restarted${model ? ` — ${model.provider}/${model.id}` : ""}.` +
-            (resumed ? "" : " The conversation was not carried over."),
+            (model
+              ? t("Agent restarted — {0}/{1}.", model.provider, model.id)
+              : t("Agent restarted.")) +
+            (resumed ? "" : " " + t("The conversation was not carried over.")),
         },
       });
     } catch (err) {
@@ -475,7 +492,11 @@ export class OmpSession implements vscode.Disposable {
         this.post({ t: "proc", status: "restarting", detail });
         this.post({
           t: "frame",
-          frame: { type: "notice", level: "warning", message: `Agent crashed (${detail}) — restarting…` },
+          frame: {
+            type: "notice",
+            level: "warning",
+            message: t("Agent crashed ({0}) — restarting…", detail),
+          },
         });
         const previousSession = this.lastSessionFile;
         setTimeout(() => {
@@ -500,7 +521,10 @@ export class OmpSession implements vscode.Disposable {
       this.initialized = false;
       const isEnoent = err.code === "ENOENT";
       const detail = isEnoent
-        ? `Cannot find the omp binary "${ompPath}". Install it (bun install -g @oh-my-pi/pi-coding-agent) or set "ompcode.ompPath" to the correct path.`
+        ? t(
+            'Cannot find the omp binary "{0}". Install it (bun install -g @oh-my-pi/pi-coding-agent) or set "ompcode.ompPath" to the correct path.',
+            ompPath,
+          )
         : `omp process error: ${err.message}`;
       this.initReject?.(new Error(detail));
       this.output.appendLine(`[omp] ${detail}`);
@@ -822,7 +846,11 @@ export class OmpSession implements vscode.Disposable {
           if (!editor) {
             this.post({
               t: "frame",
-              frame: { type: "notice", level: "warning", message: "No active editor — click into a file first." },
+              frame: {
+                type: "notice",
+                level: "warning",
+                message: t("No active editor — click into a file first."),
+              },
             });
             return;
           }
@@ -1020,7 +1048,7 @@ export class OmpSession implements vscode.Disposable {
       return;
     }
     void vscode.window
-      .showInformationMessage("OMP Code: the agent finished.", "Open chat")
+      .showInformationMessage(t("OMP Code: the agent finished."), t("Open chat"))
       .then((action) => {
         if (action) {
           this.callbacks.onReveal?.();
@@ -1124,7 +1152,14 @@ export class OmpSession implements vscode.Disposable {
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
       this.postAttached(
         [],
-        [`${name}: ${formatSize(bytes.byteLength)} exceeds the ${formatSize(MAX_ATTACHMENT_BYTES)} limit`],
+        [
+          t(
+            "{0}: {1} exceeds the {2} limit",
+            name,
+            formatSize(bytes.byteLength),
+            formatSize(MAX_ATTACHMENT_BYTES),
+          ),
+        ],
         token,
       );
       return;
@@ -1254,15 +1289,17 @@ export class OmpSession implements vscode.Disposable {
         const shown = added
           .slice(0, 3)
           .map((d) => `L${d.range.start.line + 1}: ${d.message.split("\n")[0]}`);
-        const more = added.length > 3 ? ` · +${added.length - 3} more` : "";
+        const more = added.length > 3 ? " · " + t("+{0} more", added.length - 3) : "";
         this.post({
           t: "frame",
           frame: {
             type: "notice",
             level: "warning",
             message:
-              `${added.length} new problem${added.length > 1 ? "s" : ""} in ` +
-              `${path.basename(filePath)} after the edit — ${shown.join(" · ")}${more}`,
+              (added.length > 1
+                ? t("{0} new problems in {1} after the edit", added.length, path.basename(filePath))
+                : t("1 new problem in {0} after the edit", path.basename(filePath))) +
+              ` — ${shown.join(" · ")}${more}`,
           },
         });
       }, 700), // give the language server a beat to re-analyze
@@ -1275,7 +1312,11 @@ export class OmpSession implements vscode.Disposable {
     if (!snap || !this.diffStore) {
       this.post({
         t: "frame",
-        frame: { type: "notice", level: "warning", message: "That diff snapshot is no longer available." },
+        frame: {
+          type: "notice",
+          level: "warning",
+          message: t("That diff snapshot is no longer available."),
+        },
       });
       return;
     }
@@ -1483,7 +1524,11 @@ export class OmpSession implements vscode.Disposable {
       if (result?.cancelled) {
         this.post({
           t: "frame",
-          frame: { type: "notice", level: "warning", message: "Session switch was cancelled." },
+          frame: {
+            type: "notice",
+            level: "warning",
+            message: t("Session switch was cancelled."),
+          },
         });
         return;
       }
@@ -1552,7 +1597,7 @@ export class OmpSession implements vscode.Disposable {
       if (!messages.length) {
         this.post({
           t: "frame",
-          frame: { type: "notice", level: "info", message: "Nothing to export yet." },
+          frame: { type: "notice", level: "info", message: t("Nothing to export yet.") },
         });
         return;
       }
@@ -1568,7 +1613,7 @@ export class OmpSession implements vscode.Disposable {
       this.output.appendLine(`[omp] transcript exported to ${uri.fsPath}`);
       this.post({
         t: "frame",
-        frame: { type: "notice", level: "info", message: `Transcript saved to ${uri.fsPath}` },
+        frame: { type: "notice", level: "info", message: t("Transcript saved to {0}", uri.fsPath) },
       });
     } catch (err) {
       this.reportError("export transcript", err);
@@ -1645,7 +1690,7 @@ export class OmpSession implements vscode.Disposable {
       this.post({ t: "authDone", providerId, ok: true });
       this.post({
         t: "frame",
-        frame: { type: "notice", level: "info", message: "Signed in. Restarting agent…" },
+        frame: { type: "notice", level: "info", message: t("Signed in. Restarting agent…") },
       });
       await this.restart();
     } catch (err) {
@@ -1936,8 +1981,24 @@ export class OmpSession implements vscode.Disposable {
       `font-src ${webview.cspSource}`,
     ].join("; ");
 
+    const esc = (text: string): string =>
+      text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    // Translated text goes through esc; the few strings that carry markup
+    // keep a {0} placeholder and have it filled in after escaping.
+    // `<` is escaped so a translation can never close this script tag early.
+    const bundle = JSON.stringify(currentBundle()).replace(/</g, "\\u003c");
+    const welcome = esc(
+      t(
+        "Ask questions, run commands, edit files. Type {0} for commands. Attach files with 📎, Ctrl/Cmd+V, or Shift+drag. Shift+Enter for a new line, Esc to interrupt.",
+      ),
+    ).replace("{0}", "<code>/</code>");
+
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${currentLanguage()}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -1950,45 +2011,46 @@ export class OmpSession implements vscode.Disposable {
   <header class="topbar">
     <div class="topbar-title"><span class="spark">✳</span><span id="session-title">OMP Code</span></div>
     <div class="topbar-actions">
-      <button id="btn-history" class="icon-btn" title="Session history" aria-label="Session history"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><polyline points="8 4.75 8 8 10.25 9.5"/></svg></button>
-      <button id="btn-new" class="icon-btn" title="New chat tab" aria-label="New chat tab">＋</button>
-      <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+      <button id="btn-history" class="icon-btn" title="${esc(t("Session history"))}" aria-label="${esc(t("Session history"))}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><polyline points="8 4.75 8 8 10.25 9.5"/></svg></button>
+      <button id="btn-new" class="icon-btn" title="${esc(t("New chat tab"))}" aria-label="${esc(t("New chat tab"))}">＋</button>
+      <button id="btn-settings" class="icon-btn" title="${esc(t("Settings"))}" aria-label="${esc(t("Settings"))}">⚙</button>
     </div>
   </header>
   <main id="messages">
     <div class="welcome">
       <div class="welcome-spark">✳</div>
-      <h1>What can I help you build?</h1>
-      <p class="welcome-sub">Ask questions, run commands, edit files. Type <code>/</code> for commands. Attach files with 📎, Ctrl/Cmd+V, or Shift+drag. Shift+Enter for a new line, Esc to interrupt.</p>
+      <h1>${esc(t("What can I help you build?"))}</h1>
+      <p class="welcome-sub">${welcome}</p>
     </div>
-    <div id="working" class="status-line hidden" role="status" aria-live="polite"><span class="spark spin">✳</span> <span id="working-text">Working…</span> <span class="dim">esc to interrupt</span></div>
+    <div id="working" class="status-line hidden" role="status" aria-live="polite"><span class="spark spin">✳</span> <span id="working-text">${esc(t("Working…"))}</span> <span class="dim">${esc(t("esc to interrupt"))}</span></div>
   </main>
   <div id="modal-holder"></div>
   <footer class="composer">
     <div class="composer-box">
       <div id="slash-popup" class="slash-popup hidden"></div>
       <div id="at-popup" class="slash-popup hidden"></div>
-      <div id="attachments" class="attachments" aria-label="Attached files"></div>
-      <textarea id="input" rows="1" placeholder="Ask OMP Code…" aria-label="Prompt"></textarea>
+      <div id="attachments" class="attachments" aria-label="${esc(t("Attached files"))}"></div>
+      <textarea id="input" rows="1" placeholder="${esc(t("Ask OMP Code…"))}" aria-label="${esc(t("Prompt"))}"></textarea>
       <div class="composer-row">
-        <button id="btn-attach" class="chip attach" title="Attach files (Ctrl/Cmd+V to paste, Shift+drag to drop)" aria-label="Attach files">📎</button>
-        <button id="model-chip" class="chip" aria-label="Select model">model</button>
-        <button id="profile-chip" class="chip hidden" aria-label="Model profile"></button>
-        <button id="thinking-chip" class="chip" aria-label="Thinking level">think: auto</button>
-        <button id="approval-chip" class="chip" aria-label="Tool access level">access: ask</button>
-        <span id="file-chip" class="chip ghost hidden" aria-label="Active editor file"></span>
-        <span id="stats-chip" class="chip ghost hidden" aria-label="Session tokens and cost"></span>
+        <button id="btn-attach" class="chip attach" title="${esc(t("Attach files (Ctrl/Cmd+V to paste, Shift+drag to drop)"))}" aria-label="${esc(t("Attach files"))}">📎</button>
+        <button id="model-chip" class="chip" aria-label="${esc(t("Select model"))}">${esc(t("model"))}</button>
+        <button id="profile-chip" class="chip hidden" aria-label="${esc(t("Model profile"))}"></button>
+        <button id="thinking-chip" class="chip" aria-label="${esc(t("Thinking level"))}">${esc(t("think: auto"))}</button>
+        <button id="approval-chip" class="chip" aria-label="${esc(t("Tool access level"))}">${esc(t("access: ask"))}</button>
+        <span id="file-chip" class="chip ghost hidden" aria-label="${esc(t("Active editor file"))}"></span>
+        <span id="stats-chip" class="chip ghost hidden" aria-label="${esc(t("Session tokens and cost"))}"></span>
         <span class="flex-spacer"></span>
-        <button id="btn-send" class="send-btn" title="Send" aria-label="Send">↑</button>
-        <button id="btn-stop" class="send-btn stop hidden" title="Stop" aria-label="Stop">■</button>
+        <button id="btn-send" class="send-btn" title="${esc(t("Send"))}" aria-label="${esc(t("Send"))}">↑</button>
+        <button id="btn-stop" class="send-btn stop hidden" title="${esc(t("Stop"))}" aria-label="${esc(t("Stop"))}">■</button>
       </div>
     </div>
-    <div id="proc-banner" class="proc-banner hidden"><span id="proc-text">Agent is not running.</span> <button id="btn-restart">Restart</button></div>
+    <div id="proc-banner" class="proc-banner hidden"><span id="proc-text">${esc(t("Agent is not running."))}</span> <button id="btn-restart">${esc(t("Restart"))}</button></div>
   </footer>
   <div id="menu-holder"></div>
   <div id="toast-holder"></div>
-<div id="drop-overlay" class="hidden"><div><span class="drop-title">Drop files to attach</span>Release to add them to the prompt.</div></div>
+<div id="drop-overlay" class="hidden"><div><span class="drop-title">${esc(t("Drop files to attach"))}</span>${esc(t("Release to add them to the prompt."))}</div></div>
 </div>
+<script nonce="${nonce}" type="application/json" id="l10n-bundle">${bundle}</script>
 <script nonce="${nonce}" type="module" src="${mdUri.toString()}"></script>
 <script nonce="${nonce}" type="module" src="${jsUri.toString()}"></script>
 </body>

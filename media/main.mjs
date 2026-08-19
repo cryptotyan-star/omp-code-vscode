@@ -4,6 +4,9 @@
   // every renderAssistant() call threw ReferenceError, which the host-message
   // try/catch swallowed — assistant replies silently never rendered.
   import { renderMarkdown } from "./markdown.mjs";
+  // Interface language; see src/l10n.ts. The English source text is the key,
+  // so an untranslated string renders as written instead of a placeholder.
+  import { t } from "./l10n.mjs";
 
   var vscode = acquireVsCodeApi();
   function post(msg) {
@@ -52,14 +55,14 @@
   // reports it as `model.thinking.efforts` — so these are descriptions only,
   // never the source of which levels exist.
   var THINKING_HINTS = {
-    off: "No reasoning — fastest and cheapest answer",
-    minimal: "Brief consideration — for simple, mechanical edits",
-    low: "Light reasoning — small changes in familiar code",
-    medium: "Balanced — the usual choice for everyday work",
-    high: "Deep analysis — tricky bugs, unfamiliar code",
-    xhigh: "Very deep — slower and more expensive",
-    max: "Maximum — hardest problems, slowest, priciest",
-    auto: "omp classifies each request and picks a level for it",
+    off: t("No reasoning — fastest and cheapest answer"),
+    minimal: t("Brief consideration — for simple, mechanical edits"),
+    low: t("Light reasoning — small changes in familiar code"),
+    medium: t("Balanced — the usual choice for everyday work"),
+    high: t("Deep analysis — tricky bugs, unfamiliar code"),
+    xhigh: t("Very deep — slower and more expensive"),
+    max: t("Maximum — hardest problems, slowest, priciest"),
+    auto: t("omp classifies each request and picks a level for it"),
   };
 
   // omp has exactly three approval tiers (`--approval-mode`). Native harnesses
@@ -68,21 +71,21 @@
   // commands" holds for the main agent but not for work it delegates — the
   // hints say so rather than promising a guarantee the tier does not give.
   var APPROVAL_MODES = [
-    { id: "always-ask", short: "ask", label: "Ask before changes",
-      hint: "Reads files freely; asks before writing a file or running a command" },
-    { id: "write", short: "write", label: "Write freely, ask to run",
-      hint: "Reads and edits files on its own; asks before running a command" },
-    { id: "yolo", short: "full", label: "Full access",
-      hint: "Reads, edits and runs shell commands with no confirmation" },
+    { id: "always-ask", short: t("ask"), label: t("Ask before changes"),
+      hint: t("Reads files freely; asks before writing a file or running a command") },
+    { id: "write", short: t("write"), label: t("Write freely, ask to run"),
+      hint: t("Reads and edits files on its own; asks before running a command") },
+    { id: "yolo", short: t("full"), label: t("Full access"),
+      hint: t("Reads, edits and runs shell commands with no confirmation") },
   ];
 
   // Resolver layer → words. `base`/`builtin`/`user` are the profile resolver's
   // internal names; the inspector has to say where a value came from in terms
   // the reader can act on.
   var PROVENANCE_LABELS = {
-    base: "default",
-    builtin: "built-in",
-    user: "your settings",
+    base: t("default"),
+    builtin: t("built-in"),
+    user: t("your settings"),
   };
 
   var byToolCallId = new Map();
@@ -305,11 +308,12 @@
       } else if (block.type === "thinking") {
         var ttext = block.thinking != null ? block.thinking : block.text;
         if (!ttext) continue;
-        var t = document.createElement("div");
-        t.className = "thinking" + (expanded[ti] ? "" : " collapsed");
-        t.innerHTML = '<div class="thinking-head">✳ Thinking…</div><div class="thinking-body"></div>';
-        t.querySelector(".thinking-body").innerHTML = renderMarkdown(ttext);
-        root.appendChild(t);
+        var tblock = document.createElement("div");
+        tblock.className = "thinking" + (expanded[ti] ? "" : " collapsed");
+        tblock.innerHTML = '<div class="thinking-head">✳ ' + esc(t("Thinking…")) +
+          '</div><div class="thinking-body"></div>';
+        tblock.querySelector(".thinking-body").innerHTML = renderMarkdown(ttext);
+        root.appendChild(tblock);
         ti++;
       } else if (block.type === "toolCall") {
         ensureToolCard(block.id, block.name, block.arguments);
@@ -430,7 +434,7 @@
     var collapsed = body.classList.contains("collapsed");
     var hiddenLines = (card._lineCount || 0) - COLLAPSE_LINES;
     if (collapsed && hiddenLines > 0) {
-      more.textContent = "… +" + hiddenLines + " lines";
+      more.textContent = "… " + t("+{0} lines", hiddenLines);
       more.classList.remove("hidden");
     } else {
       more.classList.add("hidden");
@@ -482,8 +486,8 @@
     post({ t: "uiError", message: detail, context: context != null ? String(context) : "" });
     if (uiErrorShown) return;
     uiErrorShown = true;
-    addNotice("error", "UI error while rendering — see the \"OMP Code\" output channel: " +
-      detail.split("\n")[0]);
+    addNotice("error", t('UI error while rendering — see the "OMP Code" output channel: {0}',
+      detail.split("\n")[0]));
   }
 
   /* ------------------------------------------------------------------ */
@@ -550,28 +554,28 @@
     if (step == null || contextStepsFired[step]) return;
     // Every step at or below the current fill counts as spoken for, so a
     // later dip cannot follow a severe warning with a milder one.
-    CONTEXT_STEPS.forEach(function (t) { if (pct >= t) contextStepsFired[t] = true; });
+    CONTEXT_STEPS.forEach(function (s) { if (pct >= s) contextStepsFired[s] = true; });
 
     if (contextNotice && contextNotice.isConnected) contextNotice.remove();
 
     var text = step >= 90
-      ? "Context is " + Math.round(pct) + "% full — close to the limit."
+      ? t("Context is {0}% full — close to the limit.", Math.round(pct))
       : step >= 75
-        ? "Context is " + Math.round(pct) + "% full — a good moment to compact."
-        : "Context is about half full.";
+        ? t("Context is {0}% full — a good moment to compact.", Math.round(pct))
+        : t("Context is about half full.");
     var hint = autoCompacts
-      ? "omp compacts automatically before it runs out; compacting now just picks the moment."
-      : "Auto-compaction is off. Compacting summarizes the history so the chat can continue.";
+      ? t("omp compacts automatically before it runs out; compacting now just picks the moment.")
+      : t("Auto-compaction is off. Compacting summarizes the history so the chat can continue.");
 
     contextNotice = addNoticeWithAction(
       step >= 75 ? "warning" : "info",
       text + " " + hint,
-      "Compact now",
+      t("Compact now"),
       function () {
         // Compaction aborts whatever the agent is doing, so it is offered
         // only between turns rather than silently killing a running tool.
         if (working) {
-          toast("Finish or stop the current turn first", 3000);
+          toast(t("Finish or stop the current turn first"), 3000);
           return;
         }
         // Un-fire the step: a compact can be refused ("already in progress",
@@ -579,7 +583,7 @@
         // the warning and its button would be gone for good.
         contextStepsFired[step] = false;
         post({ t: "compact" });
-        toast("Compacting context…", 3000);
+        toast(t("Compacting context…"), 3000);
       },
     );
   }
@@ -627,7 +631,7 @@
     workingEl.classList.toggle("hidden", !working);
     btnSend.classList.toggle("hidden", working);
     btnStop.classList.toggle("hidden", !working);
-    if (!working) workingText.textContent = "Working…";
+    if (!working) workingText.textContent = t("Working…");
     if (working) { hideWelcome(); scrollBottom(); }
   }
 
@@ -658,12 +662,12 @@
         return;
       case "setStatus": {
         var s = f.status != null ? f.status : (f.message != null ? f.message : f.text);
-        workingText.textContent = s ? String(s) : "Working…";
+        workingText.textContent = s ? String(s) : t("Working…");
         return;
       }
       case "setTitle": {
-        var t = f.title != null ? f.title : f.text;
-        sessionTitle.textContent = t ? String(t) : "OMP Code";
+        var title = f.title != null ? f.title : f.text;
+        sessionTitle.textContent = title ? String(title) : "OMP Code";
         return;
       }
       case "set_editor_text":
@@ -727,10 +731,10 @@
     var id = frame.id;
 
     var titleText = frame.title != null ? String(frame.title)
-      : method === "confirm" ? "Confirm"
-      : method === "select" ? "Select"
-      : method === "editor" ? "Edit"
-      : "Input";
+      : method === "confirm" ? t("Confirm")
+      : method === "select" ? t("Select")
+      : method === "editor" ? t("Edit")
+      : t("Input");
     var title = document.createElement("div");
     title.className = "modal-title";
     title.textContent = titleText;
@@ -749,11 +753,11 @@
     buttons.className = "modal-buttons";
 
     if (method === "confirm") {
-      buttons.appendChild(modalButton("Deny", false, function () {
+      buttons.appendChild(modalButton(t("Deny"), false, function () {
         closeActiveModal();
         respondUi(id, { confirmed: false });
       }));
-      buttons.appendChild(modalButton("Allow", true, function () {
+      buttons.appendChild(modalButton(t("Allow"), true, function () {
         closeActiveModal();
         respondUi(id, { confirmed: true });
       }));
@@ -778,7 +782,7 @@
         }));
       });
       el.appendChild(list);
-      buttons.appendChild(modalButton("Cancel", false, function () {
+      buttons.appendChild(modalButton(t("Cancel"), false, function () {
         closeActiveModal();
         respondUi(id, { cancelled: true });
       }));
@@ -803,7 +807,7 @@
           if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
         });
       }
-      buttons.appendChild(modalButton("Cancel", false, function () {
+      buttons.appendChild(modalButton(t("Cancel"), false, function () {
         closeActiveModal();
         respondUi(id, { cancelled: true });
       }));
@@ -827,7 +831,7 @@
   var setupCard = null;
 
   function keyPlaceholder(configured, hint) {
-    return configured ? "configured ✓ (paste to replace)" : hint;
+    return configured ? t("configured ✓ (paste to replace)") : hint;
   }
 
   function showSetupCard() {
@@ -837,7 +841,7 @@
 
     var title = document.createElement("div");
     title.className = "modal-title";
-    title.textContent = "Connect API keys";
+    title.textContent = t("Connect API keys");
     el.appendChild(title);
 
     var msg = document.createElement("div");
@@ -850,17 +854,17 @@
       row.className = "modal-buttons setup-signin";
       row.appendChild(modalButton(label, true, function () {
         post({ t: "login", providerId: providerId });
-        toast("Opening browser for sign-in…", 5000);
+        toast(t("Opening browser for sign-in…"), 5000);
         closeSetupCard();
       }));
       el.appendChild(row);
     }
-    signinRow("Sign in with Claude (Pro/Max)", "anthropic");
-    signinRow("Sign in with Kimi Code (subscription)", "kimi-code");
+    signinRow(t("Sign in with Claude (Pro/Max)"), "anthropic");
+    signinRow(t("Sign in with Kimi Code (subscription)"), "kimi-code");
 
     var divider = document.createElement("div");
     divider.className = "setup-divider";
-    divider.textContent = "— or use API keys —";
+    divider.textContent = t("— or use API keys —");
     el.appendChild(divider);
 
     function field(labelText, hint, configured) {
@@ -880,25 +884,25 @@
 
     var inputs = [];
     keyedProviders.forEach(function (p) {
-      var inp = field(p.label + " API key (" + p.envVar + ")", p.placeholder, keyStatus[p.id]);
+      var inp = field(t("{0} API key ({1})", p.label, p.envVar), p.placeholder, keyStatus[p.id]);
       inputs.push({ id: p.id, inp: inp });
     });
 
     var buttons = document.createElement("div");
     buttons.className = "modal-buttons";
-    buttons.appendChild(modalButton("Cancel", false, function () {
+    buttons.appendChild(modalButton(t("Cancel"), false, function () {
       closeSetupCard();
     }));
-    buttons.appendChild(modalButton("Save & Restart", true, function () {
+    buttons.appendChild(modalButton(t("Save & Restart"), true, function () {
       var keys = {};
       var any = false;
       inputs.forEach(function (entry) {
         var v = entry.inp.value.trim();
         if (v) { keys[entry.id] = v; any = true; }
       });
-      if (!any) { toast("Enter at least one key", 3000); return; }
+      if (!any) { toast(t("Enter at least one key"), 3000); return; }
       post({ t: "setKeys", keys: keys });
-      toast("Saving keys, restarting agent…", 4000);
+      toast(t("Saving keys, restarting agent…"), 4000);
       closeSetupCard();
     }));
     el.appendChild(buttons);
@@ -923,12 +927,12 @@
     var diff = Date.now() - ms;
     if (!isFinite(diff)) return "";
     var min = Math.round(diff / 60000);
-    if (min < 1) return "just now";
-    if (min < 60) return min + "m ago";
+    if (min < 1) return t("just now");
+    if (min < 60) return t("{0}m ago", min);
     var hours = Math.round(min / 60);
-    if (hours < 24) return hours + "h ago";
+    if (hours < 24) return t("{0}h ago", hours);
     var days = Math.round(hours / 24);
-    if (days < 30) return days + "d ago";
+    if (days < 30) return t("{0}d ago", days);
     return new Date(ms).toLocaleDateString();
   }
 
@@ -952,14 +956,14 @@
 
     var title = document.createElement("div");
     title.className = "modal-title";
-    title.textContent = "Session history";
+    title.textContent = t("Session history");
     el.appendChild(title);
 
     var filter = document.createElement("input");
     filter.className = "history-filter";
     filter.type = "text";
-    filter.placeholder = "Filter sessions…";
-    filter.setAttribute("aria-label", "Filter sessions");
+    filter.placeholder = t("Filter sessions…");
+    filter.setAttribute("aria-label", t("Filter sessions"));
     filter.addEventListener("input", function () {
       renderHistoryRows(filter.value.trim().toLowerCase());
     });
@@ -967,12 +971,12 @@
 
     historyList = document.createElement("div");
     historyList.className = "history-list";
-    historyList.textContent = "Loading…";
+    historyList.textContent = t("Loading…");
     el.appendChild(historyList);
 
     var buttons = document.createElement("div");
     buttons.className = "modal-buttons";
-    buttons.appendChild(modalButton("Close", false, function () { closeHistoryCard(); }));
+    buttons.appendChild(modalButton(t("Close"), false, function () { closeHistoryCard(); }));
     el.appendChild(buttons);
 
     modalHolder.appendChild(el);
@@ -1006,7 +1010,7 @@
       return hay.indexOf(query) !== -1;
     });
     if (!sessions.length) {
-      historyList.textContent = query ? "No sessions match." : "No sessions yet.";
+      historyList.textContent = query ? t("No sessions match.") : t("No sessions yet.");
       return;
     }
     sessions.forEach(function (s) {
@@ -1015,7 +1019,7 @@
 
       var main = document.createElement("div");
       main.className = "history-main";
-      main.textContent = s.title || s.preview || "(untitled session)";
+      main.textContent = s.title || s.preview || t("(untitled session)");
       row.appendChild(main);
 
       var meta = document.createElement("div");
@@ -1031,8 +1035,8 @@
 
       var when = document.createElement("span");
       when.className = "history-dim";
-      when.textContent = relativeTime(s.updatedAt) + " · " + s.userMessages +
-        (s.userMessages === 1 ? " message" : " messages");
+      when.textContent = relativeTime(s.updatedAt) + " · " +
+        (s.userMessages === 1 ? t("1 message") : t("{0} messages", s.userMessages));
       meta.appendChild(when);
 
       if (s.cwd && historyCwd && s.cwd !== historyCwd) {
@@ -1089,7 +1093,7 @@
   };
 
   function providerLabel(id) {
-    return PROVIDER_LABELS[id] || String(id || "provider");
+    return PROVIDER_LABELS[id] || String(id || t("provider"));
   }
 
   /** Pull the one-time user code out of instructions like "Enter code: H6UP-C8H2". */
@@ -1106,7 +1110,7 @@
 
     var title = document.createElement("div");
     title.className = "modal-title";
-    title.textContent = "Sign in to " + providerLabel(authProvider);
+    title.textContent = t("Sign in to {0}", providerLabel(authProvider));
     el.appendChild(title);
 
     var code = extractUserCode(instructions);
@@ -1114,8 +1118,8 @@
     var msg = document.createElement("div");
     msg.className = "modal-msg";
     msg.textContent = code
-      ? "A browser tab was opened. Confirm this code on the page, then come back — the agent restarts by itself once authorization goes through."
-      : "A browser tab was opened. Finish the sign-in there; if a code is requested back here, an input box appears.";
+      ? t("A browser tab was opened. Confirm this code on the page, then come back — the agent restarts by itself once authorization goes through.")
+      : t("A browser tab was opened. Finish the sign-in there; if a code is requested back here, an input box appears.");
     el.appendChild(msg);
 
     if (code) {
@@ -1139,25 +1143,25 @@
 
     var status = document.createElement("div");
     status.className = "auth-status";
-    status.textContent = "Waiting for authorization…";
+    status.textContent = t("Waiting for authorization…");
     el.appendChild(status);
 
     var buttons = document.createElement("div");
     buttons.className = "modal-buttons";
     if (code) {
-      buttons.appendChild(modalButton("Copy code", false, function () {
+      buttons.appendChild(modalButton(t("Copy code"), false, function () {
         post({ t: "copy", text: code });
-        toast("Code copied", 2000);
+        toast(t("Code copied"), 2000);
       }));
     }
     if (url) {
-      buttons.appendChild(modalButton("Open page again", false, function () {
+      buttons.appendChild(modalButton(t("Open page again"), false, function () {
         post({ t: "openExternal", url: String(url) });
       }));
     }
-    buttons.appendChild(modalButton("Hide", true, function () {
+    buttons.appendChild(modalButton(t("Hide"), true, function () {
       closeAuthCard();
-      toast("Sign-in still running in the background", 4000);
+      toast(t("Sign-in still running in the background"), 4000);
     }));
     el.appendChild(buttons);
 
@@ -1182,7 +1186,7 @@
 
     var title = document.createElement("div");
     title.className = "modal-title";
-    title.textContent = "Stored " + label + " API key is rejected";
+    title.textContent = t("Stored {0} API key is rejected", label);
     el.appendChild(title);
 
     var msg = document.createElement("div");
@@ -1192,12 +1196,12 @@
 
     var buttons = document.createElement("div");
     buttons.className = "modal-buttons";
-    buttons.appendChild(modalButton("Keep it", false, function () {
+    buttons.appendChild(modalButton(t("Keep it"), false, function () {
       closeDeadKeyCard();
     }));
-    buttons.appendChild(modalButton("Remove key", true, function () {
+    buttons.appendChild(modalButton(t("Remove key"), true, function () {
       post({ t: "clearKey", which: which });
-      toast(label + " key removed — restarting agent", 4000);
+      toast(t("{0} key removed — restarting agent", label), 4000);
       closeDeadKeyCard();
     }));
     el.appendChild(buttons);
@@ -1266,7 +1270,7 @@
     }
     if (!m) return;
     currentApproval = m.id;
-    approvalChip.textContent = "access: " + m.short;
+    approvalChip.textContent = t("access: {0}", m.short);
     approvalChip.title = m.label + " — " + m.hint;
     // Full access is the one setting that can run shell commands unattended;
     // it should not look like the other two.
@@ -1296,8 +1300,8 @@
     var family = currentProfile.family != null ? String(currentProfile.family) : badge;
     profileChip.textContent = badge;
     profileChip.title = currentProfile.note
-      ? family + " profile — " + String(currentProfile.note)
-      : family + " profile — click to see what it sets";
+      ? t("{0} profile — {1}", family, String(currentProfile.note))
+      : t("{0} profile — click to see what it sets", family);
     profileChip.classList.remove("hidden");
     // A profile can arrive while the card is open (model switch): rebuild it
     // in place rather than leaving stale values on screen.
@@ -1350,11 +1354,11 @@
   function buildProfileMenu(menu) {
     var p = currentProfile;
     if (!p) {
-      addMenuLabel(menu, "profile");
-      addMenuItem(menu, "No profile resolved yet", function () { closeMenu(); });
+      addMenuLabel(menu, t("profile"));
+      addMenuItem(menu, t("No profile resolved yet"), function () { closeMenu(); });
       return;
     }
-    addMenuLabel(menu, "profile — " + (p.family != null ? String(p.family) : "generic"));
+    addMenuLabel(menu, t("profile — {0}", p.family != null ? String(p.family) : t("generic")));
 
     if (p.note) {
       var note = document.createElement("div");
@@ -1368,7 +1372,7 @@
     var rows = 0;
 
     if (p.contextFile != null && p.contextFile !== "") {
-      addProfileRow(menu, "instructions file", p.contextFile, provenanceOf(p, "contextFile"));
+      addProfileRow(menu, t("instructions file"), p.contextFile, provenanceOf(p, "contextFile"));
       rows++;
     }
     if (runtime.thinking != null) {
@@ -1376,7 +1380,7 @@
       rows++;
     }
     if (spawn.approvalMode != null) {
-      var accessRow = addProfileRow(menu, "tool access", spawn.approvalMode,
+      var accessRow = addProfileRow(menu, t("tool access"), spawn.approvalMode,
         provenanceOf(p, "spawn.approvalMode"));
       // The raw id is what a settings row would carry, so that is what the
       // value shows; the plain-English reading goes on the tooltip.
@@ -1392,7 +1396,7 @@
     var overlay = spawn.overlay && typeof spawn.overlay === "object" ? spawn.overlay : null;
     var keys = overlay ? Object.keys(overlay) : [];
     if (keys.length) {
-      addMenuLabel(menu, "settings overlay");
+      addMenuLabel(menu, t("settings overlay"));
       keys.forEach(function (k) {
         // The resolver records provenance for `spawn.overlay` as a single
         // field. A per-key entry wins if a later layer ever records one.
@@ -1403,9 +1407,9 @@
     }
 
     if (!rows) {
-      addMenuItem(menu, "This profile sets nothing", function () { closeMenu(); });
+      addMenuItem(menu, t("This profile sets nothing"), function () { closeMenu(); });
     }
-    addMenuLabel(menu, "read-only — edit ompcode.modelProfiles to change");
+    addMenuLabel(menu, t("read-only — edit ompcode.modelProfiles to change"));
   }
 
   /**
@@ -1419,8 +1423,8 @@
    * everywhere means most entries silently clamp to something else.
    */
   function thinkingChoicesFor(model) {
-    var t = model && typeof model === "object" ? model.thinking : null;
-    var efforts = t && Array.isArray(t.efforts) ? t.efforts.slice() : null;
+    var think = model && typeof model === "object" ? model.thinking : null;
+    var efforts = think && Array.isArray(think.efforts) ? think.efforts.slice() : null;
     if (!efforts || !efforts.length) {
       // No reasoning support, or a model omp could not classify (custom
       // provider). Fall back to the full list rather than an empty menu.
@@ -1497,19 +1501,19 @@
 
   function buildModelMenu(menu) {
     if (!models.length) {
-      addMenuLabel(menu, "models");
-      addMenuItem(menu, "Loading models…", function () { closeMenu(); });
+      addMenuLabel(menu, t("models"));
+      addMenuItem(menu, t("Loading models…"), function () { closeMenu(); });
       return;
     }
     var list = usableModels();
     var hidden = models.length - list.length;
 
     if (probe.enabled && probe.running) {
-      addMenuLabel(menu, "checking subscriptions…");
+      addMenuLabel(menu, t("checking subscriptions…"));
     }
     if (!list.length) {
-      addMenuLabel(menu, "models");
-      addMenuItem(menu, "No model answered — check your sign-ins", function () { closeMenu(); });
+      addMenuLabel(menu, t("models"));
+      addMenuItem(menu, t("No model answered — check your sign-ins"), function () { closeMenu(); });
     }
 
     var byProv = {};
@@ -1538,18 +1542,18 @@
     });
 
     if (!probe.enabled) return;
-    addMenuLabel(menu, "verification");
+    addMenuLabel(menu, t("verification"));
     if (hidden > 0 || showAllModels) {
-      addMenuItem(menu, showAllModels ? "Hide models that failed" : "Show all models (" + hidden + " hidden)", function () {
+      addMenuItem(menu, showAllModels ? t("Hide models that failed") : t("Show all models ({0} hidden)", hidden), function () {
         showAllModels = !showAllModels;
         closeMenu();
         openMenu(modelChip, buildModelMenu);
       });
     }
-    addMenuItem(menu, probe.running ? "Checking…" : "Re-check subscriptions", function () {
+    addMenuItem(menu, probe.running ? t("Checking…") : t("Re-check subscriptions"), function () {
       if (probe.running) return;
       post({ t: "recheckModels" });
-      toast("Checking which models answer…", 4000);
+      toast(t("Checking which models answer…"), 4000);
       closeMenu();
     });
   }
@@ -1564,23 +1568,23 @@
       var choice = thinkingChoicesFor(currentModel);
       var name = currentModel && currentModel.name ? currentModel.name
         : (currentModel && currentModel.id ? currentModel.id : null);
-      addMenuLabel(menu, name ? "thinking — " + name : "thinking");
+      addMenuLabel(menu, name ? t("thinking — {0}", name) : t("thinking"));
 
       if (choice.none) {
-        addMenuChoice(menu, "Not supported", "This model does not reason — nothing to set", false, function () {
+        addMenuChoice(menu, t("Not supported"), t("This model does not reason — nothing to set"), false, function () {
           closeMenu();
         });
         return;
       }
       if (choice.unknown) {
-        addMenuLabel(menu, "levels unverified for this model");
+        addMenuLabel(menu, t("levels unverified for this model"));
       }
       choice.levels.forEach(function (level) {
         addMenuChoice(menu, level, THINKING_HINTS[level], level === thinkingChoice, function () {
           post({ t: "setThinking", level: level });
           thinkingChoice = level;
           currentThinking = level;
-          thinkingChip.textContent = "think: " + level;
+          thinkingChip.textContent = t("think: {0}", level);
           closeMenu();
         });
       });
@@ -1592,17 +1596,17 @@
   if (approvalChip) {
     approvalChip.addEventListener("click", function () {
       openMenu(approvalChip, function (menu) {
-        addMenuLabel(menu, "tool access");
+        addMenuLabel(menu, t("tool access"));
         APPROVAL_MODES.forEach(function (m) {
           addMenuChoice(menu, m.label, m.hint, m.id === currentApproval, function () {
             closeMenu();
             if (m.id === currentApproval) return;
             post({ t: "setApproval", mode: m.id });
             setApprovalChip(m.id);
-            toast("Tool access: " + m.label + " — restarting agent", 4000);
+            toast(t("Tool access: {0} — restarting agent", m.label), 4000);
           });
         });
-        addMenuLabel(menu, "changing this restarts the agent");
+        addMenuLabel(menu, t("changing this restarts the agent"));
       });
     });
   }
@@ -1618,58 +1622,58 @@
   btnSettings.addEventListener("click", function () {
     openMenu(btnSettings, function (menu) {
       addMenuLabel(menu, "OMP Code");
-      addMenuItem(menu, "New chat tab", function () {
+      addMenuItem(menu, t("New chat tab"), function () {
         closeMenu();
         post({ t: "openNewTab" });
       });
-      addMenuItem(menu, "Clear this session", function () {
+      addMenuItem(menu, t("Clear this session"), function () {
         closeMenu();
         post({ t: "newSession" });
       });
-      addMenuItem(menu, "Export transcript as Markdown", function () {
+      addMenuItem(menu, t("Export transcript as Markdown"), function () {
         closeMenu();
         post({ t: "exportTranscript" });
       });
-      addMenuItem(menu, "Sign in with Claude (Pro/Max)", function () {
+      addMenuItem(menu, t("Sign in with Claude (Pro/Max)"), function () {
         closeMenu();
         post({ t: "login", providerId: "anthropic" });
-        toast("Opening browser for sign-in…", 5000);
+        toast(t("Opening browser for sign-in…"), 5000);
       });
-      addMenuItem(menu, "Sign in with Kimi Code", function () {
+      addMenuItem(menu, t("Sign in with Kimi Code"), function () {
         closeMenu();
         post({ t: "login", providerId: "kimi-code" });
-        toast("Opening browser for sign-in…", 5000);
+        toast(t("Opening browser for sign-in…"), 5000);
       });
-      addMenuItem(menu, "API keys…", function () {
+      addMenuItem(menu, t("API keys…"), function () {
         closeMenu();
         showSetupCard();
       });
       keyedProviders.forEach(function (p) {
         if (!keyStatus[p.id]) return;
-        addMenuItem(menu, "Remove stored " + p.label + " API key", function () {
+        addMenuItem(menu, t("Remove stored {0} API key", p.label), function () {
           closeMenu();
           post({ t: "clearKey", which: p.id });
-          toast(p.label + " key removed — restarting agent", 4000);
+          toast(t("{0} key removed — restarting agent", p.label), 4000);
         });
       });
-      addMenuItem(menu, "Re-check which models work", function () {
+      addMenuItem(menu, t("Re-check which models work"), function () {
         closeMenu();
         post({ t: "recheckModels" });
-        toast("Checking which models answer…", 4000);
+        toast(t("Checking which models answer…"), 4000);
       });
-      addMenuItem(menu, "Run diagnostics", function () {
+      addMenuItem(menu, t("Run diagnostics"), function () {
         closeMenu();
         post({ t: "diagnostics" });
-        toast("Running diagnostics…", 4000);
+        toast(t("Running diagnostics…"), 4000);
       });
-      addMenuItem(menu, "Compact context", function () {
+      addMenuItem(menu, t("Compact context"), function () {
         post({ t: "compact" });
-        toast("Compacting context…", 3000);
+        toast(t("Compacting context…"), 3000);
         closeMenu();
       });
-      addMenuItem(menu, "Restart agent", function () {
+      addMenuItem(menu, t("Restart agent"), function () {
         post({ t: "restart" });
-        toast("Restarting agent…", 3000);
+        toast(t("Restarting agent…"), 3000);
         closeMenu();
       });
     });
@@ -1849,7 +1853,7 @@
       root.style.removeProperty("--accent");
       root.style.removeProperty("--accent-strong");
       root.style.removeProperty("--accent-quiet");
-      if (custom) toast("Ignoring ompcode.accentColor: " + custom + " is not a CSS color", 6000);
+      if (custom) toast(t("Ignoring ompcode.accentColor: {0} is not a CSS color", custom), 6000);
     }
   }
 
@@ -1879,7 +1883,12 @@
       var chip = document.createElement("span");
       chip.className = "att-chip" + (att.pending ? " pending" : "") + (att.selection ? " selection" : "");
       var range = att.selection ? ":" + att.selection.startLine + "-" + att.selection.endLine : "";
-      chip.title = att.pending ? "Copying…" : att.path + (att.selection ? " (lines " + att.selection.startLine + "–" + att.selection.endLine + ")" : "");
+      chip.title = att.pending
+        ? t("Copying…")
+        : att.path +
+          (att.selection
+            ? " " + t("(lines {0}–{1})", att.selection.startLine, att.selection.endLine)
+            : "");
 
       var icon = document.createElement("span");
       icon.className = "att-icon";
@@ -1902,8 +1911,8 @@
       var rm = document.createElement("button");
       rm.className = "att-remove";
       rm.type = "button";
-      rm.title = "Remove";
-      rm.setAttribute("aria-label", "Remove " + att.name);
+      rm.title = t("Remove");
+      rm.setAttribute("aria-label", t("Remove {0}", att.name));
       rm.textContent = "✕";
       rm.addEventListener("click", function () {
         attachments.splice(i, 1);
@@ -1966,7 +1975,7 @@
     };
     reader.onerror = function () {
       dropPending(token);
-      toast("Could not read " + (file.name || "the pasted file"), 5000);
+      toast(t("Could not read {0}", file.name || t("the pasted file")), 5000);
     };
     reader.readAsArrayBuffer(file);
   }
@@ -2022,7 +2031,7 @@
     if (!hasFiles) return;
     e.preventDefault();
     if (!ingestDataTransfer(dt)) {
-      toast("Nothing attachable on the clipboard", 4000);
+      toast(t("Nothing attachable on the clipboard"), 4000);
     }
   });
 
@@ -2048,7 +2057,7 @@
     dragDepth = 0;
     dropOverlay.classList.add("hidden");
     if (!ingestDataTransfer(e.dataTransfer)) {
-      toast("Nothing attachable in that drop", 4000);
+      toast(t("Nothing attachable in that drop"), 4000);
     }
     input.focus();
   });
@@ -2068,7 +2077,7 @@
     var files = readyAttachments();
     if (!text && files.length === 0) return;
     if (attachments.length !== files.length) {
-      toast("Still copying an attachment…", 3000);
+      toast(t("Still copying an attachment…"), 3000);
       return;
     }
     post({ t: "prompt", text: text, attachments: files });
@@ -2186,7 +2195,7 @@
   btnRestart.addEventListener("click", function () {
     post({ t: "restart" });
     procBanner.classList.add("hidden");
-    toast("Restarting agent…", 3000);
+    toast(t("Restarting agent…"), 3000);
   });
 
   // Global Escape: modal > menu > slash popup > abort
@@ -2201,29 +2210,29 @@
 
   // Delegated clicks: markdown links, thinking + tool card toggles
   document.addEventListener("click", function (e) {
-    var t = e.target;
-    if (!t || !t.closest) return;
-    var a = t.closest("a[data-href]");
+    var target = e.target;
+    if (!target || !target.closest) return;
+    var a = target.closest("a[data-href]");
     if (a) {
       e.preventDefault();
       post({ t: "openExternal", url: a.getAttribute("data-href") });
       return;
     }
-    var th = t.closest(".thinking-head");
+    var th = target.closest(".thinking-head");
     if (th && th.parentElement) {
       th.parentElement.classList.toggle("collapsed");
       return;
     }
-    var diffBtnEl = t.closest(".tool-diff");
+    var diffBtnEl = target.closest(".tool-diff");
     if (diffBtnEl) {
       post({ t: "openDiff", toolCallId: diffBtnEl.getAttribute("data-id") });
       return;
     }
-    var head = t.closest(".tool-head");
+    var head = target.closest(".tool-head");
     if (head) { toggleTool(head.closest(".tool-card")); return; }
-    var more = t.closest(".tool-more");
+    var more = target.closest(".tool-more");
     if (more) { toggleTool(more.closest(".tool-card")); return; }
-    var insertBtn = t.closest(".code-insert");
+    var insertBtn = target.closest(".code-insert");
     if (insertBtn) {
       var block = insertBtn.closest(".code-block");
       var src = block && block.querySelector("pre code");
@@ -2234,7 +2243,7 @@
       }
       return;
     }
-    var copyBtn = t.closest(".code-copy");
+    var copyBtn = target.closest(".code-copy");
     if (copyBtn) {
       var pre = copyBtn.closest(".code-block") && copyBtn.closest(".code-block").querySelector("pre code");
       if (pre) {
@@ -2272,10 +2281,10 @@
       // Under `auto` the reported level changes per turn and is a result, not
       // a selection — keep the ✓ on `auto` but show what it resolved to.
       if (thinkingChoice === "auto") {
-        thinkingChip.textContent = "think: auto → " + currentThinking;
+        thinkingChip.textContent = t("think: auto → {0}", currentThinking);
       } else {
         thinkingChoice = currentThinking;
-        thinkingChip.textContent = "think: " + currentThinking;
+        thinkingChip.textContent = t("think: {0}", currentThinking);
       }
     }
     if (state.sessionName) sessionTitle.textContent = String(state.sessionName);
@@ -2365,8 +2374,8 @@
       case "auto_retry_start": {
         var att = f.attempt != null ? f.attempt : "?";
         var max = f.maxAttempts != null ? f.maxAttempts : "?";
-        var txt = "Retrying (" + att + "/" + max + ")" +
-          (typeof f.delayMs === "number" ? " in " + Math.round(f.delayMs / 100) / 10 + "s" : "") +
+        var txt = t("Retrying ({0}/{1})", att, max) +
+          (typeof f.delayMs === "number" ? " " + t("in {0}s", Math.round(f.delayMs / 100) / 10) : "") +
           (f.errorMessage ? " — " + f.errorMessage : "");
         if (retryNotice && retryNotice.isConnected) retryNotice.textContent = txt;
         else retryNotice = addNotice("info", txt);
@@ -2376,11 +2385,11 @@
         if (retryNotice) { retryNotice.remove(); retryNotice = null; }
         break;
       case "auto_compaction_start":
-        compactNotice = addNotice("info", "Compacting context…");
+        compactNotice = addNotice("info", t("Compacting context…"));
         break;
       case "auto_compaction_end":
         if (compactNotice) { compactNotice.remove(); compactNotice = null; }
-        else addNotice("info", "Context compacted.");
+        else addNotice("info", t("Context compacted."));
         break;
       case "model_changed":
         post({ t: "getState" });
@@ -2430,11 +2439,12 @@
           var status = m.status;
           if (status === "exited" || status === "error") {
             if (m.needsSetup) {
-              procText.textContent = "No API keys configured — the agent has no models to use.";
+              procText.textContent = t("No API keys configured — the agent has no models to use.");
               showSetupCard();
             } else {
-              procText.textContent = "Agent is not running" +
-                (m.detail ? " (" + m.detail + ")" : "") + ".";
+              procText.textContent = m.detail
+                ? t("Agent is not running ({0}).", m.detail)
+                : t("Agent is not running.");
             }
             procBanner.classList.remove("hidden");
             setWorking(false);
@@ -2543,9 +2553,9 @@
           if (cost > 0) parts.push("$" + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)));
           if (parts.length) {
             statsChip.textContent = parts.join(" ");
-            var tip = "Session usage";
-            if (tok.reasoning > 0) tip += " · reasoning " + compactNum(tok.reasoning);
-            if (tok.cacheRead > 0) tip += " · cache read " + compactNum(tok.cacheRead);
+            var tip = t("Session usage");
+            if (tok.reasoning > 0) tip += " · " + t("reasoning {0}", compactNum(tok.reasoning));
+            if (tok.cacheRead > 0) tip += " · " + t("cache read {0}", compactNum(tok.cacheRead));
             statsChip.title = tip;
             statsChip.classList.remove("hidden");
           }
@@ -2559,7 +2569,7 @@
             diffBtn.className = "tool-diff";
             diffBtn.type = "button";
             diffBtn.textContent = "diff";
-            diffBtn.title = "Open diff (before ↔ current)";
+            diffBtn.title = t("Open diff (before ↔ current)");
             diffBtn.setAttribute("data-id", String(m.toolCallId));
             var toggle = diffHead.querySelector(".tool-toggle");
             diffHead.insertBefore(diffBtn, toggle || null);
