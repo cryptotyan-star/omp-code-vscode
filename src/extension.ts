@@ -55,16 +55,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const m = model as Record<string, unknown>;
       name = String(m.name ?? m.id ?? "");
     }
-    let ctx = "";
-    const usage = s?.contextUsage;
-    const percent =
-      usage && typeof usage === "object"
-        ? (usage as Record<string, unknown>).percent
-        : undefined;
-    if (typeof percent === "number" && Number.isFinite(percent)) {
-      ctx = ` · ${Math.round(percent)}%`;
-    }
-    statusBar.text = name ? `$(sparkle) ${name}${ctx}` : "$(sparkle) OMP Code";
+    // Context fill is deliberately absent: a percentage that reads 2% for most
+    // of a session is noise wherever it is shown. The chat warns once the
+    // window actually starts to fill (see noteContextFill in media/main.mjs).
+    statusBar.text = name ? `$(sparkle) ${name}` : "$(sparkle) OMP Code";
     statusBar.tooltip = "OMP Code — open chat";
   }
 
