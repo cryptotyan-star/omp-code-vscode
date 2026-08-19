@@ -1,0 +1,7 @@
+# `git archive` builds the hand-out zip (scripts/pack-dist.sh). node_modules is
+# committed to this repo but must never reach that archive: it carries a
+# darwin-arm64 esbuild binary, so a colleague on any other platform would get a
+# tree that cannot build. Recipients run `npm install` instead.
+node_modules/ export-ignore
+*.zip export-ignore
+*.vsix export-ignore

@@ -273,7 +273,8 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && node --test --experimental-strip-types test/*.test.ts",
-    "package": "vsce package"
+    "package": "vsce package",
+    "dist": "npm run package && bash scripts/pack-dist.sh"
   },
   "dependencies": {
     "yaml": "^2.4.5"

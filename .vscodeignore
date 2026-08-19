@@ -16,3 +16,7 @@ yarn.lock
 pnpm-lock.yaml
 .playwright-mcp/**
 test/**
+scripts/**
+INSTALL.md
+.gitattributes
+HANDOFF.md
