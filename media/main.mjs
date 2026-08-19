@@ -23,6 +23,7 @@
   var slashPopup = document.getElementById("slash-popup");
   var atPopup = document.getElementById("at-popup");
   var modelChip = document.getElementById("model-chip");
+  var profileChip = document.getElementById("profile-chip");
   var thinkingChip = document.getElementById("thinking-chip");
   var approvalChip = document.getElementById("approval-chip");
   var btnSend = document.getElementById("btn-send");
@@ -75,6 +76,15 @@
       hint: "Reads, edits and runs shell commands with no confirmation" },
   ];
 
+  // Resolver layer → words. `base`/`builtin`/`user` are the profile resolver's
+  // internal names; the inspector has to say where a value came from in terms
+  // the reader can act on.
+  var PROVENANCE_LABELS = {
+    base: "default",
+    builtin: "built-in",
+    user: "your settings",
+  };
+
   var byToolCallId = new Map();
   var anonToolSeq = 0;
   var currentAssistant = null;   // { root } for the streaming assistant message
@@ -88,6 +98,10 @@
   // `auto` becomes impossible to see as active.
   var thinkingChoice = null;
   var currentApproval = "always-ask";
+  // Resolved ModelProfile for the current model, pushed by the host as
+  // `{ t: "profile", profile }`. Stays null on a host that never sends it,
+  // which is exactly the pre-profile UI: no badge, no inspector.
+  var currentProfile = null;
   var working = false;
   var stuck = true;              // autoscroll stick-to-bottom
   var pendingLocalUser = 0;      // user bubbles rendered locally, skip echoes
@@ -1259,6 +1273,141 @@
     approvalChip.classList.toggle("chip-warn", m.id === "yolo");
   }
 
+  /* ---- Model-family badge + profile inspector ---------------------- */
+
+  /**
+   * Show which family profile is in force. The host resolves a ModelProfile
+   * per model and pushes it as `{ t: "profile", profile }`; anything unmatched
+   * resolves to BASE_PROFILE, whose badge is the empty string — the chip hides
+   * rather than showing an empty pill.
+   */
+  function setProfileChip(profile) {
+    currentProfile = profile && typeof profile === "object" ? profile : null;
+    if (!profileChip) return;
+    var wasOpen = openMenuAnchor === profileChip;
+    var badge = currentProfile && currentProfile.badge != null ? String(currentProfile.badge) : "";
+    if (!badge) {
+      profileChip.textContent = "";
+      profileChip.removeAttribute("title");
+      profileChip.classList.add("hidden");
+      if (wasOpen) closeMenu();
+      return;
+    }
+    var family = currentProfile.family != null ? String(currentProfile.family) : badge;
+    profileChip.textContent = badge;
+    profileChip.title = currentProfile.note
+      ? family + " profile — " + String(currentProfile.note)
+      : family + " profile — click to see what it sets";
+    profileChip.classList.remove("hidden");
+    // A profile can arrive while the card is open (model switch): rebuild it
+    // in place rather than leaving stale values on screen.
+    if (wasOpen) { closeMenu(); openMenu(profileChip, buildProfileMenu); }
+  }
+
+  function provenanceOf(profile, path) {
+    var p = profile && profile.provenance;
+    if (!p || typeof p !== "object") return null;
+    return p[path] != null ? String(p[path]) : null;
+  }
+
+  function profileValueText(v) {
+    if (v == null) return "—";
+    if (typeof v === "string") return v;
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    try { return JSON.stringify(v); } catch (e) { return String(v); }
+  }
+
+  /**
+   * One read-only inspector line: the effective value, and the layer that put
+   * it there. Deliberately not a `menu-item` — nothing in this card is
+   * clickable, and a hover highlight would promise otherwise.
+   */
+  function addProfileRow(menu, label, value, source) {
+    // Only the three known layers reach the class name: a value off the wire
+    // must never be pasted into `className` unchecked.
+    var known = source && PROVENANCE_LABELS[source] ? String(source) : "";
+    var row = document.createElement("div");
+    row.className = "profile-row" + (known ? " profile-row-" + known : "");
+    var head = document.createElement("div");
+    head.className = "profile-row-head";
+    var name = document.createElement("span");
+    name.className = "profile-row-label";
+    name.textContent = String(label);
+    var val = document.createElement("span");
+    val.className = "profile-row-value";
+    val.textContent = profileValueText(value);
+    head.appendChild(name);
+    head.appendChild(val);
+    row.appendChild(head);
+    var src = document.createElement("div");
+    src.className = "profile-row-src";
+    src.textContent = known ? PROVENANCE_LABELS[known] : "unknown";
+    row.appendChild(src);
+    menu.appendChild(row);
+    return row;
+  }
+
+  function buildProfileMenu(menu) {
+    var p = currentProfile;
+    if (!p) {
+      addMenuLabel(menu, "profile");
+      addMenuItem(menu, "No profile resolved yet", function () { closeMenu(); });
+      return;
+    }
+    addMenuLabel(menu, "profile — " + (p.family != null ? String(p.family) : "generic"));
+
+    if (p.note) {
+      var note = document.createElement("div");
+      note.className = "profile-note";
+      note.textContent = String(p.note);
+      menu.appendChild(note);
+    }
+
+    var runtime = p.runtime && typeof p.runtime === "object" ? p.runtime : {};
+    var spawn = p.spawn && typeof p.spawn === "object" ? p.spawn : {};
+    var rows = 0;
+
+    if (p.contextFile != null && p.contextFile !== "") {
+      addProfileRow(menu, "instructions file", p.contextFile, provenanceOf(p, "contextFile"));
+      rows++;
+    }
+    if (runtime.thinking != null) {
+      addProfileRow(menu, "thinking", runtime.thinking, provenanceOf(p, "runtime.thinking"));
+      rows++;
+    }
+    if (spawn.approvalMode != null) {
+      var accessRow = addProfileRow(menu, "tool access", spawn.approvalMode,
+        provenanceOf(p, "spawn.approvalMode"));
+      // The raw id is what a settings row would carry, so that is what the
+      // value shows; the plain-English reading goes on the tooltip.
+      for (var i = 0; i < APPROVAL_MODES.length; i++) {
+        if (APPROVAL_MODES[i].id === spawn.approvalMode) {
+          accessRow.title = APPROVAL_MODES[i].label + " — " + APPROVAL_MODES[i].hint;
+          break;
+        }
+      }
+      rows++;
+    }
+
+    var overlay = spawn.overlay && typeof spawn.overlay === "object" ? spawn.overlay : null;
+    var keys = overlay ? Object.keys(overlay) : [];
+    if (keys.length) {
+      addMenuLabel(menu, "settings overlay");
+      keys.forEach(function (k) {
+        // The resolver records provenance for `spawn.overlay` as a single
+        // field. A per-key entry wins if a later layer ever records one.
+        var src = provenanceOf(p, "spawn.overlay." + k) || provenanceOf(p, "spawn.overlay");
+        addProfileRow(menu, k, overlay[k], src);
+      });
+      rows += keys.length;
+    }
+
+    if (!rows) {
+      addMenuItem(menu, "This profile sets nothing", function () { closeMenu(); });
+    }
+    addMenuLabel(menu, "read-only — edit ompcode.modelProfiles to change");
+  }
+
   /**
    * Which thinking levels this model actually accepts.
    *
@@ -1455,6 +1604,14 @@
         });
         addMenuLabel(menu, "changing this restarts the agent");
       });
+    });
+  }
+
+  // Guarded like btnHistory and the access chip: the badge is optional, so an
+  // older skeleton must degrade to "no badge", never to a module-level throw.
+  if (profileChip) {
+    profileChip.addEventListener("click", function () {
+      openMenu(profileChip, buildProfileMenu);
     });
   }
 
@@ -2411,6 +2568,11 @@
         }
         case "approval":
           if (m.mode) setApprovalChip(String(m.mode));
+          break;
+        case "profile":
+          // Resolved ModelProfile for the current model. Never arriving is a
+          // supported state — the badge just stays hidden.
+          setProfileChip(m.profile);
           break;
         case "boot": {
           var cfg = m.cfg || {};

@@ -1183,8 +1183,9 @@ button:focus-visible,
   font-weight: 600;
 }
 
-/* Menus carrying hints need more room than the model list. */
-.menu:has(.menu-choice) {
+/* Menus carrying hints or inspector rows need more room than the model list. */
+.menu:has(.menu-choice),
+.menu:has(.profile-row) {
   min-width: min(260px, calc(100vw - 24px));
   max-width: min(340px, calc(100vw - 24px));
 }
@@ -1193,6 +1194,81 @@ button:focus-visible,
 .chip.chip-warn {
   border-color: var(--vscode-inputValidation-warningBorder, #d98b3a);
   color: var(--vscode-editorWarning-foreground, #d98b3a);
+}
+
+/* ------------------------------------------------------------------ */
+/* Model-family badge + profile inspector                              */
+/* ------------------------------------------------------------------ */
+
+/* The badge names the family whose behaviour the agent is imitating, so it
+   reads as a label rather than a control: tinted surface, normal text colour.
+   `color: var(--accent)` is avoided for the same reason .menu-choice-on
+   avoids it — several palettes are unreadable as text on a light widget. */
+#profile-chip {
+  background: var(--accent-wash);
+  border-color: var(--accent-line);
+  color: var(--fg);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+button#profile-chip:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* Why this family's values are what they are. */
+.profile-note {
+  padding: 3px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* Read-only row: no hover, no pointer — the card explains, it does not edit. */
+.profile-row {
+  padding: 5px 8px;
+  border-radius: 4px;
+  line-height: 1.35;
+  cursor: default;
+}
+
+.profile-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.profile-row-label {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.profile-row-value {
+  min-width: 0;
+  text-align: right;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.profile-row-src {
+  margin-top: 1px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  opacity: .8;
+}
+
+/* A value the user's own settings put there is the one worth spotting. */
+.profile-row.profile-row-user {
+  background: var(--accent-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* ------------------------------------------------------------------ */
