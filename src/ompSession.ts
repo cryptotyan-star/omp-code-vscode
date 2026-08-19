@@ -26,6 +26,8 @@ import {
   type ProbeResults,
 } from "./probe";
 import { KEYED_PROVIDERS } from "./providers";
+import { needsManualLoad, readInstructionFile } from "./instructionFiles";
+import { overlayArgs, writeAppendPrompt, writeOverlay } from "./profileOverlay";
 import {
   isValidProfileRow,
   resolveProfile,
@@ -336,6 +338,47 @@ export class OmpSession implements vscode.Disposable {
     return { env, injectedEnvKeys };
   }
 
+  /**
+   * `--config` / `--append-system-prompt` arguments for the profile this
+   * process will run under.
+   *
+   * Never throws: a profile that cannot be materialised must degrade to the
+   * agent's normal behaviour rather than stopping it from starting.
+   */
+  private async profileSpawnArgs(cwd: string): Promise<string[]> {
+    try {
+      const cfg = vscode.workspace.getConfiguration("ompcode");
+      const target = cfg.get<string>("defaultModel", "").trim();
+      if (!target) {
+        return []; // nothing to resolve against until a model is picked
+      }
+      const slash = target.indexOf("/");
+      const profile = resolveProfile(
+        slash > 0
+          ? { provider: target.slice(0, slash), id: target.slice(slash + 1) }
+          : { id: target },
+        this.userProfiles(),
+      );
+
+      const dir = path.join(this.context.globalStorageUri.fsPath, "profiles");
+      const overlayPath = await writeOverlay(dir, profile);
+
+      // A family whose own instruction file omp cannot discover (QWEN.md) has
+      // to have it read here and appended, or the model silently runs without
+      // the project's instructions.
+      let instructions: string | undefined;
+      if (needsManualLoad(profile.contextFile)) {
+        instructions = await readInstructionFile(cwd, profile.contextFile);
+      }
+      const appendPath = await writeAppendPrompt(dir, profile, instructions);
+
+      return overlayArgs(overlayPath, appendPath);
+    } catch (err) {
+      this.output.appendLine(`[omp] could not apply profile spawn settings: ${String(err)}`);
+      return [];
+    }
+  }
+
   /** Build a self-test report; works even when the agent never started. */
   async diagnosticsReport(): Promise<string> {
     const cfg = vscode.workspace.getConfiguration("ompcode");
@@ -464,10 +507,17 @@ export class OmpSession implements vscode.Disposable {
       this.post({ t: "proc", status: "error", detail });
     });
 
+    // Spawn-tier profile settings. The model is only selected after the
+    // handshake, so the profile is resolved from the configured default model
+    // — the one this process will actually end up on. Switching to another
+    // family later needs a restart, which pushProfile logs.
+    const extraArgs = await this.profileSpawnArgs(cwd);
+
     this.output.appendLine(
-      `[omp] starting: ${ompPath} --mode rpc-ui --cwd ${cwd} --approval-mode ${approvalMode}`,
+      `[omp] starting: ${ompPath} --mode rpc-ui --cwd ${cwd} --approval-mode ${approvalMode}` +
+        (extraArgs.length ? ` ${extraArgs.join(" ")}` : ""),
     );
-    proc.start({ ompPath, cwd, env, approvalMode });
+    proc.start({ ompPath, cwd, env, approvalMode, extraArgs });
   }
 
   private handleFrame(proc: OmpProcess, frame: OmpFrame): void {
