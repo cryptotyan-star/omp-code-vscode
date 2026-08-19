@@ -25,7 +25,6 @@
   var modelChip = document.getElementById("model-chip");
   var thinkingChip = document.getElementById("thinking-chip");
   var approvalChip = document.getElementById("approval-chip");
-  var ctxChip = document.getElementById("ctx-chip");
   var btnSend = document.getElementById("btn-send");
   var btnStop = document.getElementById("btn-stop");
   var btnHistory = document.getElementById("btn-history");
@@ -471,6 +470,93 @@
     uiErrorShown = true;
     addNotice("error", "UI error while rendering — see the \"OMP Code\" output channel: " +
       detail.split("\n")[0]);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Context-fill warning                                                */
+  /* ------------------------------------------------------------------ */
+
+  // Steps already announced this session. A single 50% warning is easy to
+  // scroll past in a long transcript, and the risk grows as the window fills,
+  // so each step speaks once and the later ones are more insistent.
+  var CONTEXT_STEPS = [50, 75, 90];
+  var contextStepsFired = {};
+  var contextNotice = null;
+
+  /**
+   * Warn as the context window fills, instead of showing a percentage that
+   * reads "2%" for most of a session.
+   *
+   * When omp's own auto-compaction is on it will handle this without help, so
+   * the message says so rather than demanding an action; the button is still
+   * there for compacting at a chosen moment rather than mid-task.
+   */
+  function noteContextFill(pct, autoCompaction) {
+    // Re-arm from the measurement itself, not from a compaction frame: a
+    // manual compact goes through the `compact` RPC, which returns a plain
+    // response and emits no auto_compaction_end, so a frame-only re-arm would
+    // leave the ladder permanently spent after the user compacts by hand.
+    // The 10-point gap keeps a reading hovering on a boundary from
+    // re-announcing itself.
+    for (var s = 0; s < CONTEXT_STEPS.length; s++) {
+      if (contextStepsFired[CONTEXT_STEPS[s]] && pct < CONTEXT_STEPS[s] - 10) {
+        contextStepsFired[CONTEXT_STEPS[s]] = false;
+      }
+    }
+
+    var step = null;
+    for (var i = CONTEXT_STEPS.length - 1; i >= 0; i--) {
+      if (pct >= CONTEXT_STEPS[i]) { step = CONTEXT_STEPS[i]; break; }
+    }
+    if (step == null || contextStepsFired[step]) return;
+    contextStepsFired[step] = true;
+
+    // Supersede the previous step's card: two stale warnings above a fresh
+    // one is worse than one accurate warning.
+    if (contextNotice && contextNotice.isConnected) contextNotice.remove();
+
+    var text = step >= 90
+      ? "Context is " + Math.round(pct) + "% full. Replies get less reliable this close to the limit."
+      : step >= 75
+        ? "Context is " + Math.round(pct) + "% full — a good moment to compact."
+        : "Context is about half full.";
+    var hint = autoCompaction
+      ? "omp compacts automatically before it runs out; compacting now just picks the moment."
+      : "Auto-compaction is off. Compacting summarizes the history so the chat can continue.";
+
+    contextNotice = addNoticeWithAction(
+      step >= 75 ? "warning" : "info",
+      text + " " + hint,
+      "Compact now",
+      function () {
+        post({ t: "compact" });
+        toast("Compacting context…", 3000);
+      },
+    );
+  }
+
+  /** A fresh or compacted session starts the warning ladder over. */
+  function resetContextWarnings() {
+    contextStepsFired = {};
+    if (contextNotice && contextNotice.isConnected) contextNotice.remove();
+    contextNotice = null;
+  }
+
+  /** Notice carrying one button — the button removes the notice when used. */
+  function addNoticeWithAction(level, text, actionText, onAction) {
+    var el = addNotice(level, text);
+    if (!el) return null;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "notice-action";
+    btn.textContent = String(actionText);
+    btn.addEventListener("click", function () {
+      el.remove();
+      if (contextNotice === el) contextNotice = null;
+      onAction();
+    });
+    el.appendChild(btn);
+    return el;
   }
 
   function addNotice(level, text) {
@@ -2002,7 +2088,8 @@
     }
     if (state.sessionName) sessionTitle.textContent = String(state.sessionName);
 
-    // context chip — defensive: shapes vary
+    // Context fill is not shown as a chip: a number that is 2% for most of a
+    // session is noise. It is only surfaced when it starts to matter.
     var pct = null;
     var cu = state.contextUsage;
     if (cu && typeof cu === "object") {
@@ -2018,10 +2105,7 @@
       pct = cu <= 1 ? cu * 100 : cu;
     }
     if (pct != null && isFinite(pct) && pct >= 0) {
-      ctxChip.textContent = "ctx " + Math.round(Math.min(pct, 999)) + "%";
-      ctxChip.classList.remove("hidden");
-    } else {
-      ctxChip.classList.add("hidden");
+      noteContextFill(pct, state.autoCompactionEnabled !== false);
     }
 
     if (typeof state.isStreaming === "boolean") setWorking(state.isStreaming);
@@ -2043,6 +2127,7 @@
     pendingLocalUser = 0;
     retryNotice = null;
     compactNotice = null;
+    resetContextWarnings();
     attachments = [];
     renderAttachments();
     setWorking(false);
@@ -2119,6 +2204,7 @@
       case "auto_compaction_end":
         if (compactNotice) { compactNotice.remove(); compactNotice = null; }
         else addNotice("info", "Context compacted.");
+        resetContextWarnings();
         break;
       case "model_changed":
         post({ t: "getState" });

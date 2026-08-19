@@ -1750,7 +1750,6 @@ export class OmpSession implements vscode.Disposable {
         <button id="thinking-chip" class="chip" aria-label="Thinking level">think: auto</button>
         <button id="approval-chip" class="chip" aria-label="Tool access level">access: ask</button>
         <span id="file-chip" class="chip ghost hidden" aria-label="Active editor file"></span>
-        <span id="ctx-chip" class="chip ghost hidden"></span>
         <span id="stats-chip" class="chip ghost hidden" aria-label="Session tokens and cost"></span>
         <span class="flex-spacer"></span>
         <button id="btn-send" class="send-btn" title="Send" aria-label="Send">↑</button>
