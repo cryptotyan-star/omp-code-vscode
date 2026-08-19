@@ -200,12 +200,60 @@ export class OmpSession implements vscode.Disposable {
     }
   }
 
+  /** Note the live conversation's JSONL path so a restart can reattach to it. */
+  private rememberSessionFile(state: unknown): void {
+    const file =
+      state && typeof state === "object"
+        ? (state as Record<string, unknown>).sessionFile
+        : undefined;
+    if (typeof file === "string" && file) {
+      this.lastSessionFile = file;
+    }
+  }
+
+  /**
+   * Reattach a freshly restarted agent to the conversation it was serving.
+   *
+   * omp starts a brand-new session on spawn, so without this the agent has no
+   * memory of a chat the webview is still displaying. `sessionFile` is
+   * optional in the RPC state, so when it is missing the transcript is cleared
+   * instead — an empty chat is honest, a stale one is not.
+   */
+  private async resumeAfterRestart(previous: string | undefined): Promise<boolean> {
+    if (!previous) {
+      this.post({ t: "reset" });
+      return false;
+    }
+    try {
+      const result = (await this.request({ type: "switch_session", sessionPath: previous })) as
+        | { cancelled?: boolean }
+        | undefined;
+      if (result?.cancelled) {
+        this.post({ t: "reset" });
+        return false;
+      }
+      const data = await this.request({ type: "get_messages" });
+      this.post({ t: "reset" });
+      this.post({ t: "transcript", messages: this.extractList(data, "messages") });
+      this.lastSessionFile = previous;
+      this.output.appendLine(`[omp] reattached to ${previous}`);
+      return true;
+    } catch (err) {
+      // Reattaching is best-effort; a failure must not leave the webview
+      // showing history the new agent does not have.
+      this.output.appendLine(`[omp] could not reattach: ${String(err)}`);
+      this.post({ t: "reset" });
+      return false;
+    }
+  }
+
   /** Stop the current process (if any) and start a fresh one. */
   async restart(): Promise<void> {
     if (!this.proc && !this.webview) {
       return; // never started and no UI — nothing to do
     }
     this.output.appendLine("[omp] restarting agent…");
+    const previousSession = this.lastSessionFile;
     const proc = this.proc;
     this.proc = undefined;
     this.initialized = false;
@@ -216,13 +264,16 @@ export class OmpSession implements vscode.Disposable {
       // ensureStarted resolves once the child is spawned; initDone resolves
       // when the handshake is through, which is what "restarted" should mean.
       await this.initDone;
+      const resumed = await this.resumeAfterRestart(previousSession);
       const model = await this.currentModel().catch(() => undefined);
       this.post({
         t: "frame",
         frame: {
           type: "notice",
           level: "info",
-          message: `Agent restarted${model ? ` — ${model.provider}/${model.id}` : ""}.`,
+          message:
+            `Agent restarted${model ? ` — ${model.provider}/${model.id}` : ""}.` +
+            (resumed ? "" : " The conversation was not carried over."),
         },
       });
     } catch (err) {
@@ -375,12 +426,16 @@ export class OmpSession implements vscode.Disposable {
           t: "frame",
           frame: { type: "notice", level: "warning", message: `Agent crashed (${detail}) — restarting…` },
         });
+        const previousSession = this.lastSessionFile;
         setTimeout(() => {
           if (this.proc !== proc) {
             return; // user restarted or closed the session meanwhile
           }
           void this.ensureStarted()
             .then(() => this.initDone)
+            // A crash loses the conversation exactly as a deliberate restart
+            // does, so the recovery path has to reattach too.
+            .then(() => this.resumeAfterRestart(previousSession))
             .catch((err) => this.reportError("auto-restart", err));
         }, 1000);
         return;
@@ -506,6 +561,7 @@ export class OmpSession implements vscode.Disposable {
         return;
       }
       const state = await proc.request({ type: "get_state" });
+      this.rememberSessionFile(state);
 
       // Proactively push everything to the webview.
       this.post({ t: "models", models });
@@ -880,6 +936,15 @@ export class OmpSession implements vscode.Disposable {
 
   /** Consecutive crash count; reset on a successful handshake or manual restart. */
   private autoRestartAttempts = 0;
+  /**
+   * JSONL path of the live conversation, captured from every state push.
+   *
+   * A restart spawns a fresh agent with no memory of the chat, while the
+   * webview keeps showing the transcript — so without reattaching, the UI
+   * displays a conversation the agent has forgotten. omp reports the path as
+   * `state.sessionFile`, and `switch_session` takes exactly that.
+   */
+  private lastSessionFile: string | undefined;
 
   /** agent_start timestamp — completion notifications only fire for slow turns. */
   private turnStartedAt = 0;
@@ -1614,6 +1679,7 @@ export class OmpSession implements vscode.Disposable {
 
   private async pushState(): Promise<void> {
     const state = await this.request({ type: "get_state" });
+    this.rememberSessionFile(state);
     if (state && typeof state === "object" && typeof (state as Record<string, unknown>).isStreaming === "boolean") {
       this.streaming = (state as Record<string, unknown>).isStreaming as boolean;
     }
@@ -1747,6 +1813,7 @@ export class OmpSession implements vscode.Disposable {
       <div class="composer-row">
         <button id="btn-attach" class="chip attach" title="Attach files (Ctrl/Cmd+V to paste, Shift+drag to drop)" aria-label="Attach files">📎</button>
         <button id="model-chip" class="chip" aria-label="Select model">model</button>
+        <button id="profile-chip" class="chip hidden" aria-label="Model profile"></button>
         <button id="thinking-chip" class="chip" aria-label="Thinking level">think: auto</button>
         <button id="approval-chip" class="chip" aria-label="Tool access level">access: ask</button>
         <span id="file-chip" class="chip ghost hidden" aria-label="Active editor file"></span>
