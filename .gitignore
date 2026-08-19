@@ -2,6 +2,7 @@ node_modules/
 dist/
 out/
 *.vsix
+*.zip
 .DS_Store
 *.log
 .vscode-test/
