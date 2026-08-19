@@ -718,9 +718,15 @@ footer.composer {
 .composer-row {
   display: flex;
   align-items: center;
+  /* Four always-visible chips overflow a default-width sidebar; wrapping
+     keeps the model name readable instead of ellipsizing it. */
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 7px;
 }
+
+/* Send/stop stays on the first row when the chips wrap. */
+.composer-row .flex-spacer { min-width: 0; }
 
 .chip {
   background: transparent;
@@ -1146,66 +1152,22 @@ button:focus-visible,
   white-space: normal;
 }
 
+/* The ✓ and the weight carry the "selected" signal: the accent hues are
+   tuned for dark backgrounds and several are unreadable as text on a light
+   widget background. */
+.menu-choice.menu-choice-on {
+  background: var(--accent-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .menu-choice.menu-choice-on .menu-choice-head {
-  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Menus carrying hints need more room than the model list. */
 .menu:has(.menu-choice) {
-  min-width: 260px;
+  min-width: min(260px, calc(100vw - 24px));
   max-width: min(340px, calc(100vw - 24px));
-}
-
-/* ------------------------------------------------------------------ */
-/* Tool approval card                                                  */
-/* ------------------------------------------------------------------ */
-
-.approval-card {
-  border-color: var(--vscode-inputValidation-warningBorder, #d98b3a);
-}
-
-.approval-card .approval-body {
-  white-space: pre-wrap;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.approval-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.approval-btn {
-  padding: 4px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--input-bg);
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-}
-
-.approval-btn:hover {
-  border-color: var(--accent);
-}
-
-.approval-btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
-}
-
-.approval-card.approval-done {
-  border-color: var(--border);
-  opacity: .72;
-}
-
-.approval-verdict {
-  font-size: 12px;
-  opacity: .8;
 }
 
 /* Full tool access — the one chip state that runs shell commands unattended. */

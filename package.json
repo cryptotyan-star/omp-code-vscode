@@ -2,7 +2,7 @@
   "name": "omp-code",
   "displayName": "OMP Code",
   "description": "Claude Code-style chat GUI in the sidebar, backed by the omp (oh-my-pi) CLI over RPC. Supports custom model providers and the Anthropic Cloud API.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "local",
   "author": "OMP Code contributors",
   "license": "MIT",
@@ -214,11 +214,11 @@
           ],
           "default": "always-ask",
           "enumDescriptions": [
-            "Ask before every tool execution.",
-            "Auto-approve reads; ask before writes and commands.",
-            "Auto-approve everything (dangerous)."
+            "Auto-approve reads; ask before writing files or running commands.",
+            "Auto-approve reads and file writes; ask before running commands.",
+            "Auto-approve everything, including shell commands (dangerous)."
           ],
-          "description": "Tool approval mode passed to omp as --approval-mode."
+          "markdownDescription": "Tool approval tier, passed to omp as `--approval-mode`. Also settable from the `access:` chip in the chat composer.\n\nNote: approving a single `task` call hands its subagent the same tier, so an approved task can run shell commands without asking again."
         },
         "ompcode.theme": {
           "type": "string",

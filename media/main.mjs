@@ -59,16 +59,19 @@
     high: "Deep analysis — tricky bugs, unfamiliar code",
     xhigh: "Very deep — slower and more expensive",
     max: "Maximum — hardest problems, slowest, priciest",
-    auto: "The model picks a level for each request",
+    auto: "omp classifies each request and picks a level for it",
   };
 
   // omp has exactly three approval tiers (`--approval-mode`). Native harnesses
   // have four to six, so these are the honest mapping, not an equivalence.
+  // Approving a `task` call hands its subagent the same tier, so "asks before
+  // commands" holds for the main agent but not for work it delegates — the
+  // hints say so rather than promising a guarantee the tier does not give.
   var APPROVAL_MODES = [
-    { id: "always-ask", short: "ask", label: "Ask every time",
-      hint: "Reads files freely; asks before writing files or running commands" },
+    { id: "always-ask", short: "ask", label: "Ask before changes",
+      hint: "Reads files freely; asks before writing a file or running a command" },
     { id: "write", short: "write", label: "Write freely, ask to run",
-      hint: "Reads and edits files on its own; asks before shell commands" },
+      hint: "Reads and edits files on its own; asks before running a command" },
     { id: "yolo", short: "full", label: "Full access",
       hint: "Reads, edits and runs shell commands with no confirmation" },
   ];
@@ -79,7 +82,12 @@
   var models = [];
   var commands = [];
   var currentModel = null;       // full Model from get_state — carries `thinking`
-  var currentThinking = null;
+  var currentThinking = null;   // level the agent reports — drives the chip
+  // What the user actually picked. `auto` resolves to a different concrete
+  // level on every turn, so the agent's reported level must not be mistaken
+  // for the selection — otherwise the ✓ jumps to a level nobody chose and
+  // `auto` becomes impossible to see as active.
+  var thinkingChoice = null;
   var currentApproval = "always-ask";
   var working = false;
   var stuck = true;              // autoscroll stick-to-bottom
@@ -473,82 +481,6 @@
     el.textContent = String(text);
     appendToMessages(el);
     return el;
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Tool approval prompts                                               */
-  /* ------------------------------------------------------------------ */
-
-  // id → card element, so a `cancel` from omp can retract the right one.
-  var approvalCards = {};
-
-  /**
-   * Render an approval request from the agent and reply exactly once.
-   *
-   * omp blocks the tool call on this answer and attaches no timeout to the
-   * dialog, so every code path here — click, cancel, or the card being torn
-   * down — must post a reply. A silent card is a hung agent.
-   */
-  function showUiPrompt(id, method, title, message, options) {
-    if (approvalCards[id]) return;
-
-    var el = document.createElement("div");
-    el.className = "ui-modal approval-card";
-
-    var head = document.createElement("div");
-    head.className = "modal-title";
-    head.textContent = "Approval required";
-    el.appendChild(head);
-
-    var body = document.createElement("div");
-    body.className = "modal-msg approval-body";
-    body.textContent = String(title || message || "The agent wants to run a tool.");
-    el.appendChild(body);
-
-    var row = document.createElement("div");
-    row.className = "approval-actions";
-
-    var answered = false;
-    function reply(payload) {
-      if (answered) return;
-      answered = true;
-      post(Object.assign({ t: "uiReply", id: id }, payload));
-      delete approvalCards[id];
-      el.classList.add("approval-done");
-      row.remove();
-      var done = document.createElement("div");
-      done.className = "approval-verdict";
-      done.textContent = payload.value === "Approve" || payload.confirmed === true
-        ? "Approved" : "Denied";
-      el.appendChild(done);
-    }
-
-    var choices = (method === "confirm" || !options || !options.length)
-      ? [{ text: "Approve", payload: { confirmed: true } },
-         { text: "Deny", payload: { confirmed: false } }]
-      : options.map(function (o) { return { text: String(o), payload: { value: String(o) } }; });
-
-    choices.forEach(function (c, i) {
-      var b = document.createElement("button");
-      b.type = "button";
-      b.className = "approval-btn" + (i === 0 ? " approval-btn-primary" : "");
-      b.textContent = c.text;
-      b.addEventListener("click", function () { reply(c.payload); });
-      row.appendChild(b);
-    });
-
-    el.appendChild(row);
-    approvalCards[id] = { el: el, reply: reply };
-    appendToMessages(el);
-    return el;
-  }
-
-  function cancelUiPrompt(id) {
-    var card = approvalCards[id];
-    if (!card) return;
-    // omp already stopped waiting; drop the card without answering.
-    delete approvalCards[id];
-    card.el.remove();
   }
 
   /* ------------------------------------------------------------------ */
@@ -1190,16 +1122,7 @@
     return el;
   }
 
-  /**
-   * Which thinking levels this model actually accepts.
-   *
-   * omp reports the real ladder per model as `thinking.efforts` and it differs
-   * sharply — claude-opus-5 is [low..max] with no `minimal`, qwen3.8-max is
-   * [minimal..high] with no `xhigh`, kimi-code/k3 is [low, high, max] and
-   * cannot be turned off at all (`requiresEffort`). A model with
-   * `reasoning: false` has no ladder whatsoever. Offering the full 8-item list
-   * everywhere means most entries silently clamp to something else.
-   */
+  /** Reflect the tier the agent is running under onto the access chip. */
   function setApprovalChip(mode) {
     if (!approvalChip) return;
     var m = null;
@@ -1215,6 +1138,16 @@
     approvalChip.classList.toggle("chip-warn", m.id === "yolo");
   }
 
+  /**
+   * Which thinking levels this model actually accepts.
+   *
+   * omp reports the real ladder per model as `thinking.efforts` and it differs
+   * sharply — claude-opus-5 is [low..max] with no `minimal`, qwen3.8-max is
+   * [minimal..high] with no `xhigh`, kimi-code/k3 is [low, high, max] and
+   * cannot be turned off at all (`requiresEffort`). A model with
+   * `reasoning: false` has no ladder whatsoever. Offering the full 8-item list
+   * everywhere means most entries silently clamp to something else.
+   */
   function thinkingChoicesFor(model) {
     var t = model && typeof model === "object" ? model.thinking : null;
     var efforts = t && Array.isArray(t.efforts) ? t.efforts.slice() : null;
@@ -1373,8 +1306,9 @@
         addMenuLabel(menu, "levels unverified for this model");
       }
       choice.levels.forEach(function (level) {
-        addMenuChoice(menu, level, THINKING_HINTS[level], level === currentThinking, function () {
+        addMenuChoice(menu, level, THINKING_HINTS[level], level === thinkingChoice, function () {
           post({ t: "setThinking", level: level });
+          thinkingChoice = level;
           currentThinking = level;
           thinkingChip.textContent = "think: " + level;
           closeMenu();
@@ -2057,7 +1991,14 @@
     }
     if (state.thinkingLevel != null) {
       currentThinking = String(state.thinkingLevel);
-      thinkingChip.textContent = "think: " + state.thinkingLevel;
+      // Under `auto` the reported level changes per turn and is a result, not
+      // a selection — keep the ✓ on `auto` but show what it resolved to.
+      if (thinkingChoice === "auto") {
+        thinkingChip.textContent = "think: auto → " + currentThinking;
+      } else {
+        thinkingChoice = currentThinking;
+        thinkingChip.textContent = "think: " + currentThinking;
+      }
     }
     if (state.sessionName) sessionTitle.textContent = String(state.sessionName);
 
@@ -2362,16 +2303,11 @@
         case "approval":
           if (m.mode) setApprovalChip(String(m.mode));
           break;
-        case "uiPrompt":
-          showUiPrompt(String(m.id), String(m.method || "select"), m.title, m.message, m.options);
-          break;
-        case "uiPromptCancel":
-          cancelUiPrompt(String(m.id));
-          break;
         case "boot": {
           var cfg = m.cfg || {};
           if (cfg.thinkingLevel) {
             currentThinking = String(cfg.thinkingLevel);
+            thinkingChoice = currentThinking;
             thinkingChip.textContent = "think: " + cfg.thinkingLevel;
           }
           if (cfg.approvalMode) setApprovalChip(String(cfg.approvalMode));

@@ -322,7 +322,7 @@ export class OmpSession implements vscode.Disposable {
 
     const cfg = vscode.workspace.getConfiguration("ompcode");
     const ompPath = cfg.get<string>("ompPath", "omp") || "omp";
-    const approvalMode = cfg.get<string>("approvalMode", "always-ask");
+    const approvalMode = this.approvalSetting().mode;
     const customProviders = await this.injectProviderKeys(
       cfg.get<Record<string, unknown>>("customProviders", {}),
     );
@@ -448,29 +448,6 @@ export class OmpSession implements vscode.Disposable {
         if (title) {
           this.callbacks.onTitle?.(title);
         }
-      } else if (frame.method === "select" || frame.method === "confirm") {
-        // Tool approval arrives this way under --approval-mode always-ask/write:
-        // omp blocks the tool call on uiContext.select() and waits for an
-        // extension_ui_response. The dialog carries no timeout, so failing to
-        // answer hangs the call forever — the webview must always reply.
-        const id = typeof frame.id === "string" ? frame.id : undefined;
-        if (!id) {
-          return;
-        }
-        this.post({
-          t: "uiPrompt",
-          id,
-          method: frame.method,
-          title: typeof frame.title === "string" ? frame.title : "",
-          message: typeof frame.message === "string" ? frame.message : "",
-          options: Array.isArray(frame.options) ? frame.options.map((o) => String(o)) : [],
-        });
-      } else if (frame.method === "cancel") {
-        // omp withdrew the request (turn aborted) — drop the card.
-        const targetId = typeof frame.targetId === "string" ? frame.targetId : undefined;
-        if (targetId) {
-          this.post({ t: "uiPromptCancel", id: targetId });
-        }
       }
     }
   }
@@ -534,6 +511,9 @@ export class OmpSession implements vscode.Disposable {
       this.post({ t: "models", models });
       this.post({ t: "commands", commands });
       this.post({ t: "state", state });
+      // A restart re-reads config but never calls pushState(), so the chip
+      // would keep showing the tier from before the restart.
+      this.pushApproval();
       this.callbacks.onState?.(state);
       this.initialized = true;
       this.autoRestartAttempts = 0; // a full handshake proves the agent is healthy
@@ -565,7 +545,7 @@ export class OmpSession implements vscode.Disposable {
             cfg: {
               defaultModel: cfg.get<string>("defaultModel", ""),
               thinkingLevel: cfg.get<string>("thinkingLevel", "auto"),
-              approvalMode: cfg.get<string>("approvalMode", "always-ask"),
+              approvalMode: this.approvalSetting().mode,
               theme: OmpSession.themeId(cfg.get<string>("theme", "violet")),
               accentColor: cfg.get<string>("accentColor", ""),
             },
@@ -646,36 +626,19 @@ export class OmpSession implements vscode.Disposable {
           await this.request({ type: "set_thinking_level", level: msg.level });
           await this.pushState();
           return;
-        case "uiReply": {
-          // Answer to an extension_ui_request (tool approval). Shapes per
-          // RpcExtensionUIResponse: select → {value}, confirm → {confirmed},
-          // dismissed → {cancelled:true}.
-          const id = typeof msg.id === "string" ? msg.id : "";
-          if (!id) {
-            return;
-          }
-          const frame: Record<string, unknown> = { type: "extension_ui_response", id };
-          if (typeof msg.value === "string") {
-            frame.value = msg.value;
-          } else if (typeof msg.confirmed === "boolean") {
-            frame.confirmed = msg.confirmed;
-          } else {
-            frame.cancelled = true;
-          }
-          this.proc?.send(frame);
-          return;
-        }
         case "setApproval": {
           // Approval is a spawn argument, so it can only change by restarting.
-          // Persisted globally: an approval level chosen for one chat is a
-          // trust decision about the tool, not about that tab.
           const mode = typeof msg.mode === "string" ? msg.mode : "";
-          if (!APPROVAL_MODES.includes(mode as ApprovalMode)) {
+          if (!(APPROVAL_MODES as readonly string[]).includes(mode)) {
             return;
           }
+          // Write into whichever scope is actually in effect: a Workspace
+          // value shadows Global, so writing Global there would restart the
+          // agent on the old tier while the chip claimed the new one.
+          const { target } = this.approvalSetting();
           await vscode.workspace
             .getConfiguration("ompcode")
-            .update("approvalMode", mode, vscode.ConfigurationTarget.Global);
+            .update("approvalMode", mode, target);
           // The config-change watcher restarts every session, so do not
           // restart here as well — that would spawn the agent twice.
           return;
@@ -1613,19 +1576,49 @@ export class OmpSession implements vscode.Disposable {
     return out;
   }
 
+  /**
+   * Effective approval tier, and the config scope it comes from.
+   *
+   * `ompcode.approvalMode` is window-scoped, so a Workspace or Folder value
+   * beats a Global one. Writing blindly to Global would leave the chip
+   * showing a tier the agent was never launched with.
+   */
+  private approvalSetting(): { mode: ApprovalMode; target: vscode.ConfigurationTarget } {
+    const cfg = vscode.workspace.getConfiguration("ompcode");
+    const info = cfg.inspect<string>("approvalMode");
+    const target =
+      info?.workspaceFolderValue !== undefined
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : info?.workspaceValue !== undefined
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+    const raw = cfg.get<string>("approvalMode", "always-ask");
+    // A hand-edited value outside the enum reaches --approval-mode verbatim,
+    // where omp warns and falls back to its own default of `yolo` — the one
+    // tier nobody wants to arrive at by typo.
+    const mode = (APPROVAL_MODES as readonly string[]).includes(raw)
+      ? (raw as ApprovalMode)
+      : "always-ask";
+    if (mode !== raw) {
+      this.output.appendLine(
+        `[omp] ignoring invalid ompcode.approvalMode "${raw}" — using "${mode}"`,
+      );
+    }
+    return { mode, target };
+  }
+
+  /** Tell the webview which tier the agent is actually running under. */
+  private pushApproval(): void {
+    this.post({ t: "approval", mode: this.approvalSetting().mode });
+  }
+
   private async pushState(): Promise<void> {
     const state = await this.request({ type: "get_state" });
     if (state && typeof state === "object" && typeof (state as Record<string, unknown>).isStreaming === "boolean") {
       this.streaming = (state as Record<string, unknown>).isStreaming as boolean;
     }
     this.post({ t: "state", state });
-    // The agent has no notion of approval — it is a spawn argument — so the
-    // chip is refreshed from config here, which also catches a change made
-    // directly in settings.json rather than from the chip.
-    this.post({
-      t: "approval",
-      mode: vscode.workspace.getConfiguration("ompcode").get<string>("approvalMode", "always-ask"),
-    });
+    this.pushApproval();
     this.callbacks.onState?.(state);
   }
 
