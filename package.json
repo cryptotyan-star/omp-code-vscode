@@ -2,7 +2,7 @@
   "name": "omp-code",
   "displayName": "OMP Code",
   "description": "Claude Code-style chat GUI in the sidebar, backed by the omp (oh-my-pi) CLI over RPC. Supports custom model providers and the Anthropic Cloud API.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "local",
   "author": "OMP Code contributors",
   "license": "MIT",

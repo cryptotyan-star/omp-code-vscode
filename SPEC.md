@@ -84,7 +84,7 @@ Message shapes (inside message_* frames):
 - `message_update` carries the FULL message so far (no delta assembly needed) — re-render in place.
 
 Model shape (get_available_models → data.models[]): `{id, name, provider, api, baseUrl, contextWindow, maxTokens, cost?...}` — display `name`, group by `provider`.
-State (get_state → data): `{model?, thinkingLevel, isStreaming, sessionId, sessionName?, contextUsage?:{tokens?...percent?}, todoPhases, messageCount, ...}` — render model chip + context %. `contextUsage` shape uncertain → webview must render defensively (if `percent` number show `NN%`, else if `tokens`+`contextWindow` compute, else hide).
+State (get_state → data): `{model?, thinkingLevel, isStreaming, sessionId, sessionName?, autoCompactionEnabled, contextUsage?:{tokens, contextWindow, percent}, todoPhases, messageCount, ...}` — render the model chip. `contextUsage.percent` is already 0-100 (omp: `(usedTokens/contextWindow)*100`) and must NOT be rescaled; it is `0` when the window is unknown, so derive from `tokens`/`contextWindow` first and treat a missing window as "unknown", not "empty". Context fill is not a chip: it drives a one-shot notice at 50/75/90%, fed from `get_session_stats` after each turn because `get_state` is not pushed as a conversation grows.
 
 ## src/ompProcess.ts (builder B)
 
@@ -310,7 +310,6 @@ error notice in the transcript.
         <button id="btn-attach" class="chip attach">📎</button>
         <button id="model-chip" class="chip">model</button>
         <button id="thinking-chip" class="chip">think: auto</button>
-        <span id="ctx-chip" class="chip ghost hidden"></span>
         <span class="flex-spacer"></span>
         <button id="btn-send" class="send-btn" title="Send">↑</button>
         <button id="btn-stop" class="send-btn stop hidden" title="Stop">■</button>
@@ -342,7 +341,7 @@ error notice in the transcript.
 - Composer: Enter=send (Shift+Enter newline), textarea autogrow (max ~8 lines), Esc→`{t:"abort"}` when working. Send is allowed with attachments and no text; a prompt is refused while an attachment is still copying.
 - Slash popup: on input starting with `/` show filtered command list (name+description) from commands; ↑↓+Enter/Tab insert `/name `; send as normal prompt text.
 - Model chip: click → `.menu` popup listing models grouped by provider (from models); click → `{t:"setModel"}`, update chip. Thinking chip → levels list (off,minimal,low,medium,high,xhigh,max,auto) → `{t:"setThinking"}`.
-- State msg → chip texts: model chip = `state.model?.name ?? state.model?.id ?? "model"`, ctx-chip = context % if derivable.
+- State msg → chip texts: model chip = `state.model?.name ?? state.model?.id ?? "model"`; thinking chip shows the user's selector (`auto → high` when auto resolves); access chip shows the approval tier.
 - Autoscroll: stick to bottom unless user scrolled up >80px (re-stick on send).
 - Tool cards: collapsed body max-height ~4 lines with `.tool-more` expander; click head toggles; `data-status` drives dot color. Summary = first arg value truncated 60ch (prefer args.command/path/file_path/url, else JSON).
 - `proc` status → #proc-banner show/hide; `reset` → clear #messages (keep welcome), reset maps.

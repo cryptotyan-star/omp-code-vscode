@@ -482,6 +482,8 @@
   var CONTEXT_STEPS = [50, 75, 90];
   var contextStepsFired = {};
   var contextNotice = null;
+  // Last known auto-compaction state — get_session_stats does not carry it.
+  var autoCompaction = true;
 
   /**
    * Warn as the context window fills, instead of showing a percentage that
@@ -491,13 +493,36 @@
    * the message says so rather than demanding an action; the button is still
    * there for compacting at a chosen moment rather than mid-task.
    */
-  function noteContextFill(pct, autoCompaction) {
-    // Re-arm from the measurement itself, not from a compaction frame: a
+  /**
+   * Fill percentage from omp's `contextUsage`, or null when unknowable.
+   *
+   * omp emits `{tokens, contextWindow, percent}` with `percent` already on a
+   * 0-100 scale (session-stats.ts: `(usedTokens / contextWindow) * 100`).
+   * It must NOT be rescaled — a genuine 0.9% reading would become 90%.
+   * When the model's window is unknown omp reports `percent: 0`, which is a
+   * placeholder rather than a measurement, so the token fallback runs first.
+   */
+  function contextPercent(cu, model) {
+    if (cu == null) return null;
+    if (typeof cu === "number") return isFinite(cu) ? cu : null;
+    if (typeof cu !== "object") return null;
+
+    var win = typeof cu.contextWindow === "number" && cu.contextWindow > 0 ? cu.contextWindow
+      : (model && typeof model === "object" && typeof model.contextWindow === "number" && model.contextWindow > 0)
+        ? model.contextWindow : null;
+    if (typeof cu.tokens === "number" && win) return (cu.tokens / win) * 100;
+    if (typeof cu.percent === "number" && isFinite(cu.percent) && cu.percent > 0) return cu.percent;
+    return null;
+  }
+
+  function noteContextFill(pct, autoCompacts) {
+    if (pct == null || !isFinite(pct) || pct < 0) return;
+
+    // Re-arm from the measurement itself, never from a compaction frame: a
     // manual compact goes through the `compact` RPC, which returns a plain
     // response and emits no auto_compaction_end, so a frame-only re-arm would
-    // leave the ladder permanently spent after the user compacts by hand.
-    // The 10-point gap keeps a reading hovering on a boundary from
-    // re-announcing itself.
+    // leave the ladder spent after the user compacts by hand. The 10-point
+    // gap keeps a reading hovering on a boundary from re-announcing itself.
     for (var s = 0; s < CONTEXT_STEPS.length; s++) {
       if (contextStepsFired[CONTEXT_STEPS[s]] && pct < CONTEXT_STEPS[s] - 10) {
         contextStepsFired[CONTEXT_STEPS[s]] = false;
@@ -509,18 +534,18 @@
       if (pct >= CONTEXT_STEPS[i]) { step = CONTEXT_STEPS[i]; break; }
     }
     if (step == null || contextStepsFired[step]) return;
-    contextStepsFired[step] = true;
+    // Every step at or below the current fill counts as spoken for, so a
+    // later dip cannot follow a severe warning with a milder one.
+    CONTEXT_STEPS.forEach(function (t) { if (pct >= t) contextStepsFired[t] = true; });
 
-    // Supersede the previous step's card: two stale warnings above a fresh
-    // one is worse than one accurate warning.
     if (contextNotice && contextNotice.isConnected) contextNotice.remove();
 
     var text = step >= 90
-      ? "Context is " + Math.round(pct) + "% full. Replies get less reliable this close to the limit."
+      ? "Context is " + Math.round(pct) + "% full — close to the limit."
       : step >= 75
         ? "Context is " + Math.round(pct) + "% full — a good moment to compact."
         : "Context is about half full.";
-    var hint = autoCompaction
+    var hint = autoCompacts
       ? "omp compacts automatically before it runs out; compacting now just picks the moment."
       : "Auto-compaction is off. Compacting summarizes the history so the chat can continue.";
 
@@ -529,6 +554,16 @@
       text + " " + hint,
       "Compact now",
       function () {
+        // Compaction aborts whatever the agent is doing, so it is offered
+        // only between turns rather than silently killing a running tool.
+        if (working) {
+          toast("Finish or stop the current turn first", 3000);
+          return;
+        }
+        // Un-fire the step: a compact can be refused ("already in progress",
+        // "session too small"), and the fill will not drop, so without this
+        // the warning and its button would be gone for good.
+        contextStepsFired[step] = false;
         post({ t: "compact" });
         toast("Compacting context…", 3000);
       },
@@ -2088,25 +2123,10 @@
     }
     if (state.sessionName) sessionTitle.textContent = String(state.sessionName);
 
-    // Context fill is not shown as a chip: a number that is 2% for most of a
-    // session is noise. It is only surfaced when it starts to matter.
-    var pct = null;
-    var cu = state.contextUsage;
-    if (cu && typeof cu === "object") {
-      if (typeof cu.percent === "number" && isFinite(cu.percent)) {
-        pct = cu.percent <= 1 ? cu.percent * 100 : cu.percent;
-      } else if (typeof cu.tokens === "number") {
-        var win = (typeof cu.contextWindow === "number" && cu.contextWindow > 0) ? cu.contextWindow
-          : (model && typeof model === "object" && typeof model.contextWindow === "number" && model.contextWindow > 0) ? model.contextWindow
-          : null;
-        if (win) pct = (cu.tokens / win) * 100;
-      }
-    } else if (typeof cu === "number" && isFinite(cu)) {
-      pct = cu <= 1 ? cu * 100 : cu;
-    }
-    if (pct != null && isFinite(pct) && pct >= 0) {
-      noteContextFill(pct, state.autoCompactionEnabled !== false);
-    }
+    // Context fill is not shown as a chip: a number that reads 2% for most of
+    // a session is noise. It surfaces only once it starts to matter.
+    autoCompaction = state.autoCompactionEnabled !== false;
+    noteContextFill(contextPercent(state.contextUsage, model), autoCompaction);
 
     if (typeof state.isStreaming === "boolean") setWorking(state.isStreaming);
   }
@@ -2204,7 +2224,6 @@
       case "auto_compaction_end":
         if (compactNotice) { compactNotice.remove(); compactNotice = null; }
         else addNotice("info", "Context compacted.");
-        resetContextWarnings();
         break;
       case "model_changed":
         post({ t: "getState" });
@@ -2355,6 +2374,10 @@
         }
         case "sessionStats": {
           var st = m.stats && typeof m.stats === "object" ? m.stats : {};
+          // get_session_stats runs after every turn and carries a fresh
+          // contextUsage; t:"state" does not, so this is the only signal that
+          // tracks a conversation as it grows.
+          noteContextFill(contextPercent(st.contextUsage, currentModel), autoCompaction);
           var tok = st.tokens && typeof st.tokens === "object" ? st.tokens : {};
           var parts = [];
           if (typeof tok.input === "number" && tok.input > 0) parts.push("↑" + compactNum(tok.input));
