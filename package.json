@@ -243,6 +243,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Override the palette accent with a custom CSS color, e.g. `#8B7BF7` or `hsl(250 85% 72%)`. Empty = use `ompcode.theme`."
+        },
+        "ompcode.modelProfiles": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Per-model behaviour profiles, layered on top of the built-in ones. Each entry is `{ family, match: { id?, provider?, host? }, contextFile?, badge?, runtime?, spawn? }`; `match.id` is a regular expression **as a string**. Your rows always win over the built-ins, whatever their specificity.\n\nOnly policy belongs here — omp already resolves the thinking dialect, the effort ladder, stream timeouts and tool-schema shape per provider, and overriding those makes things worse, not better.\n\nExample — never let one model run shell commands unattended:\n\n```json\n[{ \"family\": \"qwen\", \"match\": { \"id\": \"qwen\" },\n   \"spawn\": { \"overlay\": { \"tools.approval\": { \"bash\": \"prompt\" } } } }]\n```"
         }
       }
     }

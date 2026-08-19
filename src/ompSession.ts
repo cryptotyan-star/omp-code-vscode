@@ -26,6 +26,14 @@ import {
   type ProbeResults,
 } from "./probe";
 import { KEYED_PROVIDERS } from "./providers";
+import {
+  isValidProfileRow,
+  resolveProfile,
+  spawnSignature,
+  type MatchableModel,
+  type ModelProfile,
+  type ResolvedProfile,
+} from "./modelProfiles";
 
 /** globalState key holding the last probe verdicts, shared by every session. */
 const PROBE_STATE_KEY = "ompcode.probeResults";
@@ -945,6 +953,8 @@ export class OmpSession implements vscode.Disposable {
    * `state.sessionFile`, and `switch_session` takes exactly that.
    */
   private lastSessionFile: string | undefined;
+  /** Profile of the model currently selected, or undefined before the first state. */
+  private activeProfile: ResolvedProfile | undefined;
 
   /** agent_start timestamp — completion notifications only fire for slow turns. */
   private turnStartedAt = 0;
@@ -1672,6 +1682,105 @@ export class OmpSession implements vscode.Disposable {
     return { mode, target };
   }
 
+  /**
+   * User-authored profile rows. Invalid entries are dropped rather than
+   * throwing: a typo in settings.json must not stop the agent from starting.
+   */
+  private userProfiles(): ModelProfile[] {
+    const raw = vscode.workspace.getConfiguration("ompcode").get<unknown[]>("modelProfiles", []);
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const rows: ModelProfile[] = [];
+    for (const entry of raw) {
+      if (!isValidProfileRow(entry)) {
+        this.output.appendLine(`[omp] ignoring invalid ompcode.modelProfiles entry: ${JSON.stringify(entry)}`);
+        continue;
+      }
+      // `match.id` arrives from JSON as a string; the resolver wants a RegExp.
+      const row = entry as ModelProfile & { match: { id?: unknown } };
+      if (typeof row.match.id === "string") {
+        try {
+          row.match = { ...row.match, id: new RegExp(row.match.id, "i") };
+        } catch {
+          this.output.appendLine(`[omp] ignoring profile row with an invalid match.id regex: ${String(row.match.id)}`);
+          continue;
+        }
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /** Resolve the profile for the model in `state` and send it to the webview. */
+  private pushProfile(state: unknown): void {
+    const model = state && typeof state === "object" ? (state as Record<string, unknown>).model : undefined;
+    if (!model || typeof model !== "object") {
+      this.post({ t: "profile", profile: undefined });
+      return;
+    }
+    const m = model as Record<string, unknown>;
+    const matchable: MatchableModel = {
+      provider: typeof m.provider === "string" ? m.provider : undefined,
+      id: typeof m.id === "string" ? m.id : undefined,
+      baseUrl: typeof m.baseUrl === "string" ? m.baseUrl : undefined,
+    };
+    const profile = resolveProfile(matchable, this.userProfiles());
+    const previous = this.activeProfile;
+    this.activeProfile = profile;
+    this.post({ t: "profile", profile });
+
+    // Spawn-tier fields (approval tier, overlay, instruction file) only reach
+    // omp through argv, so a change there needs a respawn. Record it and say
+    // so once, rather than restarting the agent behind the user's back.
+    if (previous && spawnSignature(previous) !== spawnSignature(profile)) {
+      this.output.appendLine(
+        `[omp] profile "${profile.family}" wants different spawn settings — restart to apply`,
+      );
+    }
+    void this.applyRuntimeProfile(profile, state);
+  }
+
+  /**
+   * Apply the profile's runtime fields over RPC — no restart, so switching
+   * models stays instant.
+   *
+   * Only fields the profile actually sets are sent, and only when they differ
+   * from what the agent already reports, so this never fights a level the user
+   * has just chosen by hand.
+   */
+  private async applyRuntimeProfile(profile: ResolvedProfile, state: unknown): Promise<void> {
+    const runtime = profile.runtime;
+    if (!runtime) {
+      return;
+    }
+    const current = state && typeof state === "object" ? (state as Record<string, unknown>) : {};
+    try {
+      let level = runtime.thinking;
+      if (level === "inherit") {
+        // No literal fits a whole family — qwen3.7-plus is [minimal..high]
+        // while qwen3.8-max is [low, medium, xhigh] — so defer to the ladder
+        // omp resolved for this exact model.
+        const model = current.model as Record<string, unknown> | undefined;
+        const thinking = model?.thinking as Record<string, unknown> | undefined;
+        const fallback = typeof thinking?.defaultLevel === "string" ? thinking.defaultLevel : undefined;
+        level = (fallback as typeof level) ?? "auto";
+      }
+      if (level && level !== current.thinkingLevel) {
+        await this.request({ type: "set_thinking_level", level });
+      }
+      if (runtime.steeringMode && runtime.steeringMode !== current.steeringMode) {
+        await this.request({ type: "set_steering_mode", mode: runtime.steeringMode });
+      }
+      if (runtime.interruptMode && runtime.interruptMode !== current.interruptMode) {
+        await this.request({ type: "set_interrupt_mode", mode: runtime.interruptMode });
+      }
+    } catch (err) {
+      // A profile that cannot be applied must not break model switching.
+      this.output.appendLine(`[omp] could not apply profile "${profile.family}": ${String(err)}`);
+    }
+  }
+
   /** Tell the webview which tier the agent is actually running under. */
   private pushApproval(): void {
     this.post({ t: "approval", mode: this.approvalSetting().mode });
@@ -1685,6 +1794,7 @@ export class OmpSession implements vscode.Disposable {
     }
     this.post({ t: "state", state });
     this.pushApproval();
+    this.pushProfile(state);
     this.callbacks.onState?.(state);
   }
 
