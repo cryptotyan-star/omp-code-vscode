@@ -12,3 +12,6 @@ coverage/
 # Local working notes — session context, not for publication
 HANDOFF.md
 *.bundle
+
+# Personal editor state; launch.json is shared on purpose
+.vscode/settings.json
