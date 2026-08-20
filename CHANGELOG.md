@@ -2,6 +2,32 @@
 
 All notable changes to OMP Code. Versions follow [semantic versioning](https://semver.org/).
 
+## [0.6.0] — 2026-08-20
+
+### Added
+
+- **The profile inspector edits two of its fields in place.** Clicking `thinking` or
+  `tool access` opens the list of values that field accepts, and choosing one writes a row
+  into `ompcode.modelProfiles` for that family. A field the user has overridden also
+  offers "reset to the built-in value", which prunes the key — and the row with it, once
+  nothing is left — so the inspector stops claiming the value came from your settings.
+
+  Only these two are editable, because both are scalars with a closed set of values: the
+  menu can offer every legal one and cannot produce an illegal one. The overlay bag, the
+  instruction file and the note stay in settings.json, reachable from the same menu.
+
+  This is not the `think:` / `access:` chips in another shape. Those steer the current
+  session; a profile is a standing rule for every model of the family, which is why the
+  agent restarts to pick the change up — warmly, with the conversation reattached.
+
+### Fixed
+
+- **`off` was offered as a thinking level for models that cannot turn reasoning off.**
+  A variable rename in 0.5.0 left the check reading a property off the translation
+  function instead of the model descriptor; a missing property is not an error, so it
+  silently read as "reasoning is optional". The test suite now refuses any source file
+  that shadows `t` or reads a property from it.
+
 ## [0.5.0] — 2026-08-20
 
 ### Added

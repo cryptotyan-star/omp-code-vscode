@@ -178,3 +178,31 @@ test("the webview gets the bundle and the module that reads it", () => {
   assert.match(host, /replace\(\/<\/g, "\\\\u003c"\)/, "the bundle must escape <");
   assert.match(webview, /from "\.\/l10n\.mjs"/, "main.mjs must import t()");
 });
+
+test("the translation function is never shadowed or read as an object", () => {
+  // `t` is a one-letter import, which makes it easy to shadow by accident.
+  // One such rename left `t.requiresEffort` pointing at the translation
+  // function instead of the model's thinking descriptor, so `off` stayed on
+  // offer for models where reasoning is mandatory — silently, because reading
+  // a missing property is not an error.
+  const property = /(?<![\w.$])t\.[A-Za-z_]/;
+  const declaration = /\b(?:var|let|const)\s+t\b|function\s+t\s*\(/;
+  const files = [
+    ...fs.readdirSync(path.join(root, "src")).map((f) => path.join("src", f)),
+    ...fs.readdirSync(path.join(root, "media")).map((f) => path.join("media", f)),
+  ].filter((f) => f.endsWith(".ts") || f.endsWith(".mjs"));
+
+  let scanned = 0;
+  for (const file of files) {
+    const text = fs.readFileSync(path.join(root, file), "utf8");
+    if (!text.includes('from "./l10n')) {
+      continue; // does not import t; a local `t` there is nobody's business
+    }
+    scanned++;
+    text.split("\n").forEach((line, i) => {
+      assert.ok(!property.test(line), `${file}:${i + 1} reads a property off t(): ${line.trim()}`);
+      assert.ok(!declaration.test(line), `${file}:${i + 1} shadows t(): ${line.trim()}`);
+    });
+  }
+  assert.ok(scanned >= 3, `only ${scanned} files import t() — the scan is looking in the wrong place`);
+});

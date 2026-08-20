@@ -1326,7 +1326,7 @@
    * it there. Deliberately not a `menu-item` — nothing in this card is
    * clickable, and a hover highlight would promise otherwise.
    */
-  function addProfileRow(menu, label, value, source) {
+  function addProfileRow(menu, label, value, source, onClick) {
     // Only the three known layers reach the class name: a value off the wire
     // must never be pasted into `className` unchecked.
     var known = source && PROVENANCE_LABELS[source] ? String(source) : "";
@@ -1347,8 +1347,82 @@
     src.className = "profile-row-src";
     src.textContent = known ? PROVENANCE_LABELS[known] : "unknown";
     row.appendChild(src);
+    if (onClick) {
+      // Editable rows are the ones whose value is a closed set; the caret
+      // says so without needing a legend.
+      row.className += " profile-row-edit";
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
+      var caret = document.createElement("span");
+      caret.className = "profile-row-caret";
+      caret.textContent = "›";
+      head.appendChild(caret);
+      row.addEventListener("click", onClick);
+      row.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+      });
+    }
     menu.appendChild(row);
     return row;
+  }
+
+  /**
+   * Write one profile field to `ompcode.modelProfiles`, or clear it with a
+   * null value. This is deliberately not the same as the `think:`/`access:`
+   * chips: those steer the current session, while this is a standing rule for
+   * every model of the family, so the agent restarts to pick it up.
+   */
+  function setProfileField(field, value) {
+    if (!currentProfile || currentProfile.family == null) return;
+    post({ t: "setProfileField", family: String(currentProfile.family), field: field, value: value });
+    closeMenu();
+    toast(value === null
+      ? t("Cleared — back to the built-in value. Restarting agent…")
+      : t("Saved to your settings. Restarting agent…"), 4000);
+  }
+
+  function buildProfileThinkingMenu(menu) {
+    var p = currentProfile;
+    if (!p) return;
+    var current = p.runtime && p.runtime.thinking != null ? String(p.runtime.thinking) : null;
+    addMenuLabel(menu, t("thinking — {0}", p.family != null ? String(p.family) : t("generic")));
+    var choice = thinkingChoicesFor(currentModel);
+    // `inherit` is the honest option for a family whose members disagree on
+    // the ladder: it defers to whatever omp resolved for this exact model.
+    addMenuChoice(menu, "inherit", t("Use whatever level this model defaults to"),
+      current === "inherit", function () { setProfileField("runtime.thinking", "inherit"); });
+    choice.levels.forEach(function (level) {
+      addMenuChoice(menu, level, THINKING_HINTS[level], level === current, function () {
+        setProfileField("runtime.thinking", level);
+      });
+    });
+    addProfileMenuFooter(menu, "runtime.thinking");
+  }
+
+  function buildProfileAccessMenu(menu) {
+    var p = currentProfile;
+    if (!p) return;
+    var current = p.spawn && p.spawn.approvalMode != null ? String(p.spawn.approvalMode) : null;
+    addMenuLabel(menu, t("tool access — {0}", p.family != null ? String(p.family) : t("generic")));
+    APPROVAL_MODES.forEach(function (m) {
+      addMenuChoice(menu, m.id, m.label + " — " + m.hint, m.id === current, function () {
+        setProfileField("spawn.approvalMode", m.id);
+      });
+    });
+    addProfileMenuFooter(menu, "spawn.approvalMode");
+  }
+
+  /** Shared tail: reset (only when there is an override) and a way back. */
+  function addProfileMenuFooter(menu, field) {
+    if (provenanceOf(currentProfile, field) === "user") {
+      addMenuItem(menu, t("Reset to the built-in value"), function () {
+        setProfileField(field, null);
+      });
+    }
+    addMenuItem(menu, t("‹ Back to the profile"), function () {
+      closeMenu();
+      openMenu(profileChip, buildProfileMenu);
+    });
   }
 
   function buildProfileMenu(menu) {
@@ -1369,28 +1443,31 @@
 
     var runtime = p.runtime && typeof p.runtime === "object" ? p.runtime : {};
     var spawn = p.spawn && typeof p.spawn === "object" ? p.spawn : {};
-    var rows = 0;
 
     if (p.contextFile != null && p.contextFile !== "") {
       addProfileRow(menu, t("instructions file"), p.contextFile, provenanceOf(p, "contextFile"));
-      rows++;
     }
-    if (runtime.thinking != null) {
-      addProfileRow(menu, "thinking", runtime.thinking, provenanceOf(p, "runtime.thinking"));
-      rows++;
-    }
-    if (spawn.approvalMode != null) {
-      var accessRow = addProfileRow(menu, t("tool access"), spawn.approvalMode,
-        provenanceOf(p, "spawn.approvalMode"));
-      // The raw id is what a settings row would carry, so that is what the
-      // value shows; the plain-English reading goes on the tooltip.
-      for (var i = 0; i < APPROVAL_MODES.length; i++) {
-        if (APPROVAL_MODES[i].id === spawn.approvalMode) {
-          accessRow.title = APPROVAL_MODES[i].label + " — " + APPROVAL_MODES[i].hint;
-          break;
-        }
+
+    // Thinking and tool access always resolve to something — the base profile
+    // sets both — so these two rows are always here to be clicked.
+    addProfileRow(menu, "thinking", runtime.thinking, provenanceOf(p, "runtime.thinking"),
+      function () {
+        closeMenu();
+        openMenu(profileChip, buildProfileThinkingMenu);
+      });
+
+    var accessRow = addProfileRow(menu, t("tool access"), spawn.approvalMode,
+      provenanceOf(p, "spawn.approvalMode"), function () {
+        closeMenu();
+        openMenu(profileChip, buildProfileAccessMenu);
+      });
+    // The raw id is what a settings row would carry, so that is what the
+    // value shows; the plain-English reading goes on the tooltip.
+    for (var i = 0; i < APPROVAL_MODES.length; i++) {
+      if (APPROVAL_MODES[i].id === spawn.approvalMode) {
+        accessRow.title = APPROVAL_MODES[i].label + " — " + APPROVAL_MODES[i].hint;
+        break;
       }
-      rows++;
     }
 
     var overlay = spawn.overlay && typeof spawn.overlay === "object" ? spawn.overlay : null;
@@ -1403,13 +1480,13 @@
         var src = provenanceOf(p, "spawn.overlay." + k) || provenanceOf(p, "spawn.overlay");
         addProfileRow(menu, k, overlay[k], src);
       });
-      rows += keys.length;
     }
 
-    if (!rows) {
-      addMenuItem(menu, t("This profile sets nothing"), function () { closeMenu(); });
-    }
-    addMenuLabel(menu, t("read-only — edit ompcode.modelProfiles to change"));
+    addMenuItem(menu, t("Edit ompcode.modelProfiles…"), function () {
+      closeMenu();
+      post({ t: "openProfileSettings" });
+    });
+    addMenuLabel(menu, t("the rest is edited in settings.json"));
   }
 
   /**
@@ -1433,7 +1510,7 @@
     }
     var out = [];
     // `off` only when thinking is not mandatory server-side.
-    if (!t.requiresEffort) out.push("off");
+    if (!think.requiresEffort) out.push("off");
     efforts.forEach(function (e) { if (THINKING_HINTS[e] != null) out.push(e); });
     out.push("auto");
     return { levels: out, unknown: false, none: false };

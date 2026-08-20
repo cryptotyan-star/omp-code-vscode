@@ -403,3 +403,132 @@ export function isValidProfileRow(v: unknown): v is ModelProfile {
     Array.isArray(match.host);
   return hasPredicate;
 }
+
+/**
+ * The fields the profile inspector can edit in place.
+ *
+ * Both are single scalars with a closed set of values, which is why they are
+ * safe to expose as a menu: the UI can offer every legal value and cannot
+ * produce an illegal one. Everything else a profile carries — the overlay
+ * bag, the instruction file, the note — is free-form, and a hand-rolled
+ * editor for it would be worse than settings.json.
+ */
+export const EDITABLE_PROFILE_FIELDS = ["runtime.thinking", "spawn.approvalMode"] as const;
+export type EditableProfileField = (typeof EDITABLE_PROFILE_FIELDS)[number];
+
+export function isEditableProfileField(v: unknown): v is EditableProfileField {
+  return typeof v === "string" && (EDITABLE_PROFILE_FIELDS as readonly string[]).includes(v);
+}
+
+/** A `match` as it appears in settings.json: `id` is a regex source string. */
+export interface SerialisedMatch {
+  id?: string;
+  provider?: string[];
+  host?: string[];
+}
+
+/**
+ * The match a new user row for `family` should carry, taken from the built-in
+ * row it is meant to override.
+ *
+ * The broad row — the one matching on `id` alone — is preferred over the
+ * narrow `{id, provider}` one: predicates are ANDed, so copying the narrow
+ * row would silently stop the user's override from applying to the same
+ * family reached through a different provider. Returns undefined for a family
+ * with no built-in row at all, leaving the caller to scope the row itself.
+ */
+export function builtinMatchForFamily(
+  family: string,
+  rows: readonly ModelProfile[] = MODEL_PROFILES,
+): SerialisedMatch | undefined {
+  const forFamily = rows.filter((row) => row.family === family);
+  if (!forFamily.length) {
+    return undefined;
+  }
+  const broad = forFamily.find(
+    (row) => row.match.id !== undefined && !row.match.provider && !row.match.host,
+  );
+  const chosen = broad ?? forFamily[0];
+  if (!chosen) {
+    return undefined;
+  }
+  const out: SerialisedMatch = {};
+  if (chosen.match.id) {
+    out.id = chosen.match.id.source;
+  }
+  if (chosen.match.provider) {
+    out.provider = [...chosen.match.provider];
+  }
+  if (chosen.match.host) {
+    out.host = [...chosen.match.host];
+  }
+  return out;
+}
+
+/** Escape a model id so it matches itself and nothing else. */
+export function exactMatchFor(modelId: string): SerialisedMatch {
+  return { id: `^${modelId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$` };
+}
+
+/**
+ * Return `rows` with one field of the user row for `family` set to `value`,
+ * or removed when `value` is null.
+ *
+ * Pure and JSON-shaped on both sides: the input is whatever
+ * `ompcode.modelProfiles` currently holds and the output is what should be
+ * written back, so the caller only reads and writes configuration.
+ *
+ * Clearing prunes upward — the key, then an emptied section, then a row that
+ * has become nothing but `family` and `match`. Without that last step the
+ * settings file would fill with inert rows, and, worse, the inspector would
+ * keep reporting the value as coming from "your settings" when it no longer
+ * does.
+ */
+export function applyProfileFieldEdit(
+  rows: readonly unknown[],
+  edit: {
+    family: string;
+    field: EditableProfileField;
+    value: string | null;
+    /** Used only when no row for this family exists yet. */
+    fallbackMatch: SerialisedMatch;
+  },
+): unknown[] {
+  const [section, key] = edit.field.split(".") as ["runtime" | "spawn", string];
+  const out: unknown[] = rows.map((row) =>
+    isPlainObject(row) ? (JSON.parse(JSON.stringify(row)) as unknown) : row,
+  );
+
+  let index = out.findIndex(
+    (row) => isValidProfileRow(row) && (row as ModelProfile).family === edit.family,
+  );
+
+  if (index === -1) {
+    if (edit.value === null) {
+      return out; // nothing of the user's to clear
+    }
+    out.push({ family: edit.family, match: { ...edit.fallbackMatch } });
+    index = out.length - 1;
+  }
+
+  const row = out[index] as Record<string, unknown>;
+  const bag = isPlainObject(row[section]) ? { ...(row[section] as object) } : {};
+
+  if (edit.value === null) {
+    delete (bag as Record<string, unknown>)[key];
+    if (Object.keys(bag).length === 0) {
+      delete row[section];
+    } else {
+      row[section] = bag;
+    }
+    const left = Object.keys(row).filter((k) => k !== "family" && k !== "match");
+    if (left.length === 0) {
+      out.splice(index, 1);
+    }
+    return out;
+  }
+
+  (bag as Record<string, unknown>)[key] = edit.value;
+  row[section] = bag;
+  return out;
+}

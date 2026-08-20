@@ -30,10 +30,15 @@ import { needsManualLoad, readInstructionFile } from "./instructionFiles";
 import { currentBundle, currentLanguage, t } from "./l10n.ts";
 import { overlayArgs, writeAppendPrompt, writeOverlay } from "./profileOverlay";
 import {
+  applyProfileFieldEdit,
+  builtinMatchForFamily,
+  exactMatchFor,
+  isEditableProfileField,
   isValidProfileRow,
   resolveProfile,
   spawnSignature,
   type MatchableModel,
+  type EditableProfileField,
   type ModelProfile,
   type ResolvedProfile,
 } from "./modelProfiles";
@@ -120,6 +125,8 @@ export class OmpSession implements vscode.Disposable {
   private pendingShowHistory = false;
   /** Webview script signalled `ready`; gates messages that need a live listener. */
   private webviewReady = false;
+  /** What the active profile was resolved from; see pushProfile. */
+  private activeModel: MatchableModel | undefined;
   /** Editor selections attached before the webview could receive them. */
   private pendingContexts: Attachment[] = [];
   /** One resume attempt per session — never on webview re-attach. */
@@ -781,6 +788,25 @@ export class OmpSession implements vscode.Disposable {
           // restart here as well — that would spawn the agent twice.
           return;
         }
+        case "setProfileField": {
+          const family = typeof msg.family === "string" ? msg.family : "";
+          const field = msg.field;
+          // null clears the override; anything else must be a plain string,
+          // since both editable fields are closed-set scalars.
+          const value = msg.value === null ? null : typeof msg.value === "string" ? msg.value : undefined;
+          if (!family || !isEditableProfileField(field) || value === undefined) {
+            return;
+          }
+          await this.updateUserProfileField(family, field, value);
+          return;
+        }
+        case "openProfileSettings":
+          // The overlay is a free-form settings bag; a hand-rolled editor for
+          // it would be worse than the real one.
+          await vscode.commands.executeCommand("workbench.action.openSettingsJson", {
+            revealSetting: { key: "ompcode.modelProfiles", edit: true },
+          });
+          return;
         case "getModels":
           await this.pushModels();
           return;
@@ -1781,6 +1807,53 @@ export class OmpSession implements vscode.Disposable {
    * User-authored profile rows. Invalid entries are dropped rather than
    * throwing: a typo in settings.json must not stop the agent from starting.
    */
+  /**
+   * Write one inspector-editable field into `ompcode.modelProfiles`.
+   *
+   * The edit lands in a user row for the family rather than being applied to
+   * the live agent: a profile is a standing rule for every model of that
+   * family, which is exactly what distinguishes it from the `think:` and
+   * `access:` chips that only steer the current session.
+   *
+   * The config-change watcher restarts the sessions, so nothing is restarted
+   * here. That restart is warm — the conversation is reattached — which is
+   * what makes it acceptable for a runtime field like thinking.
+   */
+  private async updateUserProfileField(
+    family: string,
+    field: EditableProfileField,
+    value: string | null,
+  ): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("ompcode");
+    const inspected = cfg.inspect<unknown[]>("modelProfiles");
+    // Write into whichever scope is actually in effect: a Workspace value
+    // shadows Global, so writing Global there would look like a no-op.
+    const inWorkspace = inspected?.workspaceValue !== undefined;
+    const target = inWorkspace
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+    const current = inWorkspace ? inspected?.workspaceValue : inspected?.globalValue;
+    const rows = Array.isArray(current) ? current : [];
+
+    const fallbackMatch =
+      builtinMatchForFamily(family) ??
+      (this.activeModel?.id ? exactMatchFor(this.activeModel.id) : undefined);
+    if (!fallbackMatch) {
+      // No built-in row to copy and no model to pin to: a row would have to
+      // match everything, which would silently override every other family.
+      this.output.appendLine(
+        `[omp] cannot scope a profile row for "${family}" — edit ompcode.modelProfiles by hand`,
+      );
+      return;
+    }
+
+    const next = applyProfileFieldEdit(rows, { family, field, value, fallbackMatch });
+    await cfg.update("modelProfiles", next, target);
+    this.output.appendLine(
+      `[omp] profile "${family}": ${field} ${value === null ? "cleared" : `set to ${value}`}`,
+    );
+  }
+
   private userProfiles(): ModelProfile[] {
     const raw = vscode.workspace.getConfiguration("ompcode").get<unknown[]>("modelProfiles", []);
     if (!Array.isArray(raw)) {
@@ -1821,6 +1894,9 @@ export class OmpSession implements vscode.Disposable {
       baseUrl: typeof m.baseUrl === "string" ? m.baseUrl : undefined,
     };
     const profile = resolveProfile(matchable, this.userProfiles());
+    // Kept so an inspector edit on a family with no built-in row can still
+    // scope its new row to something narrower than "every model".
+    this.activeModel = matchable;
     const previous = this.activeProfile;
     this.activeProfile = profile;
     this.post({ t: "profile", profile });

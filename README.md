@@ -169,6 +169,7 @@ The chat interface ships in English and Russian. `ompcode.language` (`auto` by d
 | `ompcode.approvalMode` | `always-ask` | `always-ask` \| `write` \| `yolo` |
 | `ompcode.theme` | `violet` | Accent palette / цветовая гамма: violet, coral, emerald, amber, magenta |
 | `ompcode.accentColor` | `""` | Custom accent CSS color / свой цвет акцента, например `#8B7BF7` |
+| `ompcode.modelProfiles` | `[]` | Per-family behaviour rows layered over the built-ins / профили поведения под семейства моделей |
 | `ompcode.resumeLastSession` | `false` | New chats resume the most recent session / новые чаты продолжают последнюю сессию |
 
 

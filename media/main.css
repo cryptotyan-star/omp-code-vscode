@@ -1265,6 +1265,35 @@ button#profile-chip:hover {
   opacity: .8;
 }
 
+/* Rows whose value is a closed set can be changed from here; the rest are
+   read-outs. The caret carries that difference, so it must not be the only
+   signal — the hover surface and the pointer say it too. */
+.profile-row-edit {
+  cursor: pointer;
+}
+
+.profile-row-edit:hover,
+.profile-row-edit:focus-visible {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.profile-row-edit:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.profile-row-caret {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.profile-row-edit:hover .profile-row-caret {
+  color: var(--fg);
+}
+
 /* A value the user's own settings put there is the one worth spotting. */
 .profile-row.profile-row-user {
   background: var(--accent-wash);

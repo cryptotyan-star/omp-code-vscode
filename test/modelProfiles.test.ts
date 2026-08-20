@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyProfileFieldEdit,
+  builtinMatchForFamily,
+  exactMatchFor,
+  isEditableProfileField,
   matchScore,
   resolveProfile,
   spawnSignature,
@@ -310,4 +314,174 @@ test("MODEL_PROFILES: k2/k3 matching does not fire inside unrelated identifiers"
   assert.notEqual(resolveProfile({ provider: "x", id: "mak2r" }).family, "kimi");
   assert.equal(resolveProfile({ provider: "x", id: "k3" }).family, "kimi");
   assert.equal(resolveProfile({ provider: "x", id: "kimi-k2.5" }).family, "kimi");
+});
+
+/* ------------------------------------------------------------------ */
+/* Editing a profile field from the inspector                          */
+/* ------------------------------------------------------------------ */
+
+test("builtinMatchForFamily prefers the broad row over the provider-scoped one", () => {
+  // Predicates are ANDed, so copying `{id, provider}` would stop the override
+  // applying to the same family reached through another provider.
+  const match = builtinMatchForFamily("qwen");
+  assert.equal(match?.id, "qwen");
+  assert.equal(match?.provider, undefined);
+  assert.equal(match?.host, undefined);
+});
+
+test("builtinMatchForFamily returns nothing for a family with no built-in row", () => {
+  assert.equal(builtinMatchForFamily("no-such-family"), undefined);
+});
+
+test("exactMatchFor pins a single model and escapes regex metacharacters", () => {
+  const match = exactMatchFor("gpt-4.1-mini");
+  assert.equal(match.id, "^gpt-4\\.1-mini$");
+  assert.ok(new RegExp(match.id ?? "", "i").test("gpt-4.1-mini"));
+  assert.ok(!new RegExp(match.id ?? "", "i").test("gpt-4x1-mini"));
+  assert.ok(!new RegExp(match.id ?? "", "i").test("gpt-4.1-mini-preview"));
+});
+
+test("isEditableProfileField accepts only the two closed-set fields", () => {
+  assert.ok(isEditableProfileField("runtime.thinking"));
+  assert.ok(isEditableProfileField("spawn.approvalMode"));
+  assert.ok(!isEditableProfileField("spawn.overlay"));
+  assert.ok(!isEditableProfileField("contextFile"));
+  assert.ok(!isEditableProfileField("__proto__"));
+  assert.ok(!isEditableProfileField(42));
+});
+
+const FALLBACK = { id: "qwen" };
+
+test("editing with no existing row appends one carrying the family match", () => {
+  const out = applyProfileFieldEdit([], {
+    family: "qwen",
+    field: "runtime.thinking",
+    value: "high",
+    fallbackMatch: FALLBACK,
+  });
+  assert.deepEqual(out, [
+    { family: "qwen", match: { id: "qwen" }, runtime: { thinking: "high" } },
+  ]);
+});
+
+test("editing reuses the existing row for that family", () => {
+  const rows = [
+    { family: "kimi", match: { id: "kimi" }, runtime: { thinking: "low" } },
+    { family: "qwen", match: { id: "qwen3" }, spawn: { approvalMode: "write" } },
+  ];
+  const out = applyProfileFieldEdit(rows, {
+    family: "qwen",
+    field: "runtime.thinking",
+    value: "medium",
+    fallbackMatch: FALLBACK,
+  });
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[1], {
+    family: "qwen",
+    match: { id: "qwen3" }, // the user's own match is never rewritten
+    spawn: { approvalMode: "write" },
+    runtime: { thinking: "medium" },
+  });
+});
+
+test("editing does not mutate the array or the rows handed in", () => {
+  const rows = [{ family: "qwen", match: { id: "qwen" }, runtime: { thinking: "low" } }];
+  const snapshot = JSON.parse(JSON.stringify(rows)) as unknown;
+  applyProfileFieldEdit(rows, {
+    family: "qwen",
+    field: "runtime.thinking",
+    value: "max",
+    fallbackMatch: FALLBACK,
+  });
+  assert.deepEqual(rows, snapshot);
+});
+
+test("clearing removes the key, then the emptied section, then the empty row", () => {
+  const rows = [{ family: "qwen", match: { id: "qwen" }, runtime: { thinking: "high" } }];
+  // A row left as nothing but family+match would keep the inspector claiming
+  // the value came from "your settings".
+  assert.deepEqual(
+    applyProfileFieldEdit(rows, {
+      family: "qwen",
+      field: "runtime.thinking",
+      value: null,
+      fallbackMatch: FALLBACK,
+    }),
+    [],
+  );
+});
+
+test("clearing keeps a row that still carries something else", () => {
+  const rows = [
+    {
+      family: "qwen",
+      match: { id: "qwen" },
+      runtime: { thinking: "high", steeringMode: "all" },
+      spawn: { approvalMode: "write" },
+    },
+  ];
+  const out = applyProfileFieldEdit(rows, {
+    family: "qwen",
+    field: "runtime.thinking",
+    value: null,
+    fallbackMatch: FALLBACK,
+  });
+  assert.deepEqual(out, [
+    {
+      family: "qwen",
+      match: { id: "qwen" },
+      runtime: { steeringMode: "all" },
+      spawn: { approvalMode: "write" },
+    },
+  ]);
+});
+
+test("clearing a field nobody set is a no-op, not a new row", () => {
+  assert.deepEqual(
+    applyProfileFieldEdit([], {
+      family: "qwen",
+      field: "spawn.approvalMode",
+      value: null,
+      fallbackMatch: FALLBACK,
+    }),
+    [],
+  );
+});
+
+test("rows that are not valid profiles are carried through untouched", () => {
+  const rows: unknown[] = ["junk", { family: "qwen" }, 7];
+  const out = applyProfileFieldEdit(rows, {
+    family: "qwen",
+    field: "spawn.approvalMode",
+    value: "always-ask",
+    fallbackMatch: FALLBACK,
+  });
+  // `{ family: "qwen" }` has no match predicate, so it is not a profile row —
+  // the resolver ignores it, and so must the editor.
+  assert.deepEqual(out.slice(0, 3), rows);
+  assert.deepEqual(out[3], {
+    family: "qwen",
+    match: { id: "qwen" },
+    spawn: { approvalMode: "always-ask" },
+  });
+});
+
+test("an edited row actually wins over the built-in when resolved", () => {
+  const rows = applyProfileFieldEdit([], {
+    family: "qwen",
+    field: "spawn.approvalMode",
+    value: "always-ask",
+    fallbackMatch: builtinMatchForFamily("qwen") ?? { id: "qwen" },
+  }) as Array<{ match: { id: string } }>;
+  // settings.json holds the regex as a string; the loader compiles it.
+  const compiled = rows.map((row) => ({ ...row, match: { ...row.match, id: new RegExp(row.match.id, "i") } }));
+  const resolved = resolveProfile(
+    { provider: "alibaba-coding-plan", id: "qwen3-max" },
+    compiled as never,
+  );
+  assert.equal(resolved.spawn?.approvalMode, "always-ask");
+  assert.equal(resolved.provenance["spawn.approvalMode"], "user");
+  // Untouched fields keep coming from the built-in row.
+  assert.equal(resolved.contextFile, "QWEN.md");
+  assert.equal(resolved.provenance.contextFile, "builtin");
 });
