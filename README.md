@@ -4,183 +4,362 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![VS Code ^1.85](https://img.shields.io/badge/VS%20Code-%5E1.85-007ACC.svg)](https://code.visualstudio.com/)
 
-Claude Code-style chat in the VS Code sidebar, powered by the [`omp`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent) (oh-my-pi) coding agent over RPC. Works with the Anthropic Cloud API and any custom OpenAI-compatible provider.
+**A Claude Code-style coding agent inside VS Code — running on whichever model you already pay for.**
 
-Чат в стиле Claude Code в боковой панели VS Code поверх CLI-агента `omp` (oh-my-pi). Поддерживает Anthropic Cloud API и любые кастомные OpenAI-совместимые провайдеры.
+🇷🇺 [Русская версия](README.ru.md)
 
-The extension is a GUI and nothing else: every model call, tool call and session belongs
-to the `omp` CLI, which you install separately. Without that binary it does not start.
+<p align="center">
+  <img src="docs/images/chat.png" alt="OMP Code chat panel: a question, the agent's reasoning, a tool call and a markdown answer" width="560">
+</p>
 
-Расширение — только GUI: все вызовы моделей, инструментов и сессии принадлежат CLI `omp`,
-который ставится отдельно. Без него расширение не стартует.
+OMP Code is a chat panel for the [`omp`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent)
+(oh-my-pi) coding agent. It reads and edits your files, runs commands, and answers with
+streaming markdown — the same shape of workflow as Claude Code, except the model behind it
+is your choice: Claude, GLM, Qwen, Kimi, or any OpenAI-compatible endpoint you point it at.
+
+> The extension is a **GUI and nothing else**. Every model call, tool call and session
+> belongs to the `omp` CLI, which you install separately — without that binary the panel
+> does not start. That also means your keys and your code go exactly where `omp` sends
+> them, and nowhere else: this extension has no server, no telemetry and no account.
 
 > **Not affiliated** with the oh-my-pi project, Anthropic, or any model provider. This is
 > an independent client that talks to the `omp` CLI over its RPC interface.
->
-> **Не аффилировано** с проектом oh-my-pi, Anthropic и любым провайдером моделей — это
-> независимый клиент, общающийся с CLI `omp` по его RPC-интерфейсу.
 
 ---
 
-## Install / Установка
+## Contents
 
-1. Install the `omp` CLI / Установите CLI `omp`:
+- [What you get](#what-you-get)
+- [Spending less](#spending-less)
+- [Install](#install)
+- [Sign in](#sign-in)
+- [Features in detail](#features-in-detail)
+- [Model profiles](#model-profiles)
+- [Settings](#settings)
+- [Commands and shortcuts](#commands-and-shortcuts)
+- [Custom providers](#custom-providers)
+- [Language](#language)
+- [Platforms](#platforms)
+- [When something does not work](#when-something-does-not-work)
 
-   ```bash
-   bun install -g @oh-my-pi/pi-coding-agent
-   ```
+---
 
-   The extension looks for `omp` in `PATH` (`~/.bun/bin` is added automatically). A custom binary path can be set via the `ompcode.ompPath` setting.
+## What you get
 
-   Расширение ищет `omp` в `PATH` (`~/.bun/bin` добавляется автоматически). Свой путь к бинарнику — настройка `ompcode.ompPath`.
+| | |
+| --- | --- |
+| **One panel, any model** | Claude, GLM, Qwen, Kimi and custom OpenAI-compatible providers in one picker. Switch mid-conversation. |
+| **Your subscription, not an API bill** | One-click OAuth for Claude Pro/Max and Kimi Code. No per-token key needed for those. |
+| **Real cost, visible** | Tokens in, tokens out and dollars spent, updated after every turn. |
+| **Dead models hidden** | Each model is probed once with a throwaway request; the ones answering 401 never reach the picker. |
+| **Tool access on a leash** | Three tiers, from "ask before every change" to unattended. Per-tool rules if you want them. |
+| **Model-family profiles** | A model behaves the way its own harness makes it behave — instruction file, reasoning level, approval tier. |
+| **Sessions that survive** | Full history across workspaces, searchable, resumable. A crash reattaches instead of losing the chat. |
+| **English and Russian** | Independent of the VS Code display language. |
 
-   On Windows a `.cmd` shim is started through `cmd.exe` automatically; point `ompcode.ompPath` at `omp.exe` or `omp.cmd` if the install is somewhere off `PATH`. Windows ARM is not supported — omp has no build for it.
+---
 
-   На Windows `.cmd`-обёртка запускается через `cmd.exe` автоматически; если установка лежит вне `PATH`, укажите `ompcode.ompPath` на `omp.exe` или `omp.cmd`. Windows ARM не поддерживается — сборки omp под него нет.
+## Spending less
 
-2. Install the extension / Установите расширение:
+Plain first: **this extension does not make tokens cheaper.** What it does is make what you
+spend visible, and make it easy to send each piece of work to the cheapest thing that can
+actually do it. Concretely:
 
-   Download the `.vsix` from [Releases](https://github.com/cryptotyan-star/omp-code-vscode/releases) and either drop it on the Extensions
-   view, or run:
+**1. Use the subscription you already pay for.**
+`Sign in with Claude (Pro/Max)` and `Sign in with Kimi Code` are OAuth flows — the agent
+uses your existing plan rather than a metered API key. Nothing to top up, nothing to leak.
 
-   Скачайте `.vsix` из [Releases](https://github.com/cryptotyan-star/omp-code-vscode/releases) и либо перетащите в панель Extensions,
-   либо выполните:
+<p align="center"><img src="docs/images/keys.png" alt="The API keys card: subscription sign-in buttons above four API key fields" width="520"></p>
 
-   ```bash
-   code --install-extension omp-code-<version>.vsix
-   ```
+**2. Route the work to the cheap model, without the cheap model behaving badly.**
+The picker groups every model your credentials actually unlock. Coding-plan models (Qwen,
+GLM, Kimi) sit next to frontier ones, and [profiles](#model-profiles) make each family
+behave the way its native tool does — so the cheap option is genuinely usable for the
+routine 80% of a day, and you keep the expensive one for the part that needs it.
 
-   Building from source instead / Сборка из исходников:
+<p align="center"><img src="docs/images/models.png" alt="Model picker grouped by provider, with one failing model hidden" width="520"></p>
 
-   ```bash
-   npm install && npm run build && npm run package
-   ```
+**3. Stop paying for reasoning you did not need.**
+Reasoning tokens are billed like any other output. The `think:` chip sets the level per
+session and a profile pins it per model family; `auto` hands the decision to omp, which
+classifies each request instead of reasoning hard about everything.
 
-## Sign in / Вход
+**4. Know the bill before it arrives.**
+The composer footer shows `↑input ↓output $cost` for the session, refreshed every turn.
+Hovering adds reasoning tokens and cache reads, which is usually where a surprise hides.
 
-Two ways to authenticate / два способа аутентификации:
+**5. Do not blow the context window by accident.**
+At 50%, 75% and 90% full the panel says so and offers a one-click compaction, rather than
+letting a long session quietly grow into an expensive one.
 
-1. **Subscription (Claude Pro/Max or Kimi Code)** — run **OMP Code: Sign in with Claude (Subscription)** or **OMP Code: Sign in with Kimi Code (Subscription)** from the Command Palette. A browser opens for OAuth; the agent restarts when login completes.
+<p align="center"><img src="docs/images/context-warning.png" alt="Context warning at 78% with a Compact now button, and the session cost in the footer" width="520"></p>
 
-2. **API keys** — stored in VS Code Secret Storage, never written to plaintext config:
-   - **OMP Code: Set Anthropic API Key** → passed to `omp` as `ANTHROPIC_API_KEY`.
-   - **OMP Code: Set Kimi (Moonshot) API Key** → passed as `MOONSHOT_API_KEY`.
-   - **OMP Code: Set GLM (Zhipu BigModel) API Key** → passed as `ZHIPU_API_KEY` (native `zhipu-coding-plan` provider, GLM catalog incl. `glm-5.2`).
-   - **OMP Code: Set Qwen (Alibaba Coding Plan) API Key** → passed as `ALIBABA_CODING_PLAN_API_KEY` (native `alibaba-coding-plan` provider, Qwen catalog). Plain DashScope pay-as-you-go keys go through a custom provider instead (below).
-   - **OMP Code: Set Custom Provider API Key** → injects an `apiKey` into a `customProviders` entry at agent start (the settings.json value is used as a fallback).
+**6. Do not burn turns on a stale credential.**
+With `ompcode.verifyModels` on (the default), every model gets one tiny throwaway request
+before it is offered, and the ones whose key or plan does not cover them are hidden. The
+alternative — discovering a dead key three turns into a task — costs far more than the
+probe. Verdicts are cached for 12 hours.
 
-1. **Подписка (Claude Pro/Max или Kimi Code)** — выполните **OMP Code: Sign in with Claude (Subscription)** или **OMP Code: Sign in with Kimi Code (Subscription)** из палитры команд. Откроется браузер для OAuth; после входа агент перезапустится.
+---
 
-2. **API-ключи** — хранятся в Secret Storage VS Code, не попадают в конфиг в открытом виде:
-   - **OMP Code: Set Anthropic API Key** → передаётся `omp` как `ANTHROPIC_API_KEY`.
-   - **OMP Code: Set Kimi (Moonshot) API Key** → передаётся как `MOONSHOT_API_KEY`.
-   - **OMP Code: Set GLM (Zhipu BigModel) API Key** → передаётся как `ZHIPU_API_KEY` (нативный провайдер `zhipu-coding-plan`, каталог GLM включая `glm-5.2`).
-   - **OMP Code: Set Qwen (Alibaba Coding Plan) API Key** → передаётся как `ALIBABA_CODING_PLAN_API_KEY` (нативный провайдер `alibaba-coding-plan`, каталог Qwen). Обычный DashScope-ключ (pay-as-you-go) подключается через кастомного провайдера (ниже).
-   - **OMP Code: Set Custom Provider API Key** → вливает `apiKey` в запись `customProviders` при старте агента (значение из settings.json используется как fallback).
+## Install
 
-## Custom providers / Кастомные провайдеры
+**1. Install the agent.** The extension is a GUI on top of it:
 
-Add providers in `settings.json` under `ompcode.customProviders` — same shape as the `providers:` map in `~/.omp/agent/models.yml`. They are merged into `models.yml` before each agent start (existing entries are never deleted).
+```bash
+bun install -g @oh-my-pi/pi-coding-agent
+```
 
-Провайдеры задаются в `settings.json` в `ompcode.customProviders` — та же структура, что и `providers:` в `~/.omp/agent/models.yml`. Перед каждым стартом агента они вливаются в `models.yml` (существующие записи не удаляются).
+No `bun`? `curl -fsSL https://bun.sh/install | bash`, then restart your terminal.
+The extension finds `omp` on `PATH` (`~/.bun/bin` is added automatically); a custom
+location goes in `ompcode.ompPath`.
+
+**2. Install the extension.** Download the `.vsix` from
+[Releases](https://github.com/cryptotyan-star/omp-code-vscode/releases), then either drop
+it onto the Extensions view or run:
+
+```bash
+code --install-extension omp-code-<version>.vsix
+```
+
+Building from source instead:
+
+```bash
+git clone https://github.com/cryptotyan-star/omp-code-vscode.git
+cd omp-code-vscode
+npm install && npm run build && npm run package
+```
+
+**3. Open the chat.** The OMP Code icon in the activity bar, or `Cmd/Ctrl+Alt+O` for a
+chat in an editor tab beside your code.
+
+> Upgrading from a build older than 0.5.0? The extension id changed, so the new version
+> installs *beside* the old one — two icons, every command twice. Remove the old one with
+> `code --uninstall-extension local.omp-code` and reload the window.
+
+---
+
+## Sign in
+
+Two ways, mixable:
+
+**Subscription (OAuth).** `OMP Code: Sign in with Claude (Subscription)` or
+`… with Kimi Code (Subscription)`, also on the ⚙ menu and the setup card. A browser tab
+opens; if the provider asks for a code back, the panel shows one with a copy button. The
+credential lands in the agent's own store, so it survives extension updates.
+
+**API keys.** Anthropic, Kimi (Moonshot), GLM (Zhipu BigModel) and Qwen (Alibaba Coding
+Plan) each have a palette command and a field on the setup card. Keys live in **VS Code
+Secret Storage** — never in `settings.json` — and are handed to the agent process as
+environment variables.
+
+A key that starts returning 401 is called out with an offer to remove it, because a stale
+key is worse than no key: the provider still advertises its whole model range and every
+one of them fails.
+
+---
+
+## Features in detail
+
+### The conversation
+
+Streaming markdown with syntax highlighting, collapsible reasoning blocks, and a card per
+tool call showing arguments, status and output. After an edit, the card grows a **diff**
+button (before ↔ current) and any new language-server diagnostics surface as a warning —
+so you see what the agent broke without leaving the panel.
+
+Type `/` for the agent's slash commands, `@` to autocomplete a workspace file into the
+prompt. Attach files with 📎, `Ctrl/Cmd+V`, or `Shift`-drag. `Cmd/Ctrl+Alt+L` sends the
+current editor selection, line range and all. `Shift+Enter` is a newline, `Esc` interrupts
+the turn.
+
+### Tool access
+
+Three tiers, changed from the `access:` chip and applied by restarting the agent.
+
+<p align="center"><img src="docs/images/tool-access.png" alt="Tool access menu: ask before changes, write freely, full access" width="520"></p>
+
+| Tier | Reads | Writes files | Runs commands |
+| --- | --- | --- | --- |
+| `always-ask` | auto | asks | asks |
+| `write` | auto | auto | asks |
+| `yolo` | auto | auto | **auto** |
+
+Anything that asks opens a dialog in the panel with the tool name and its arguments:
+
+<p align="center"><img src="docs/images/approval.png" alt="Approval dialog asking to run npm test, with Deny and Allow" width="520"></p>
+
+> One honest caveat: approving a single `task` call hands its subagent the same tier, so an
+> approved task can run commands without asking again. Per-tool rules
+> (`tools.approval` in a profile overlay) are enforced even under `yolo`, which is the
+> reliable way to keep one tool locked.
+
+### Session history
+
+Every session across every workspace, with a filter over title, preview, folder and model.
+Picking one reattaches the agent to it and replays the transcript.
+
+<p align="center"><img src="docs/images/history.png" alt="Session history with model badges and relative times" width="520"></p>
+
+`Export transcript as Markdown` writes the whole conversation to a file.
+
+### Everything else on the ⚙ menu
+
+<p align="center"><img src="docs/images/settings-menu.png" alt="The gear menu: new tab, clear session, export, sign-in, keys, re-check models, diagnostics, compact, restart" width="520"></p>
+
+---
+
+## Model profiles
+
+A model behaves the way its own harness makes it behave. Claude Code reads `CLAUDE.md` and
+approves conservatively; Qwen Code reads `QWEN.md` and defaults a tier looser; ZCode and
+Kimi Code read `AGENTS.md` with their own reasoning defaults. Pick a model and OMP Code
+applies that family's conventions instead of one flat setting for everything.
+
+The badge next to the model chip names the family. Clicking it opens the inspector, which
+shows every value **and where it came from** — built-in, or your settings:
+
+<p align="center"><img src="docs/images/profile.png" alt="Profile inspector for the Qwen family showing instructions file, thinking, tool access and settings overlay with provenance" width="520"></p>
+
+`thinking` and `tool access` are editable in place: click the row, pick a value, and it is
+written to `ompcode.modelProfiles` as a rule for that whole family.
+
+<p align="center"><img src="docs/images/profile-thinking.png" alt="Thinking submenu listing the model's real effort ladder with a reset option" width="520"></p>
+
+> This is not the `think:` / `access:` chips in another shape. Those steer the **current
+> session**; a profile is a standing rule for **every model of the family**, which is why
+> changing one restarts the agent — warmly, with the conversation reattached.
+
+A field you have overridden also offers *reset to the built-in value*. The overlay bag and
+the instruction file stay in `settings.json`, one click away from the same menu.
+
+Built-in families: `claude`, `glm`, `qwen`, `kimi`, plus a `generic` floor for anything
+unmatched. Your own rows always win over the built-ins:
 
 ```jsonc
-{
-  "ompcode.customProviders": {
-    "akemi": {
-      "baseUrl": "http://host:8000/v1",
-      "api": "openai-completions",
-      "apiKey": "sk-...",
-      "models": [
-        {
-          "id": "akemi-1",
-          "name": "Akemi",
-          "contextWindow": 128000,
-          "maxTokens": 32000
-        }
-      ]
+"ompcode.modelProfiles": [
+  {
+    "family": "qwen",
+    "match": { "id": "qwen" },          // regex, as a string, case-insensitive
+    "runtime": { "thinking": "high" },   // applied over RPC, no restart
+    "spawn": {                           // reaches omp through argv — needs a restart
+      "approvalMode": "always-ask",
+      "overlay": {
+        "disabledProviders": ["claude"],
+        "tools.approval": { "bash": "deny" }   // enforced even under yolo
+      }
     }
-  },
-  "ompcode.defaultModel": "akemi/akemi-1"
+  }
+]
+```
+
+Only policy belongs here. omp already resolves the thinking dialect, the effort ladder,
+stream timeouts and tool-schema shape per provider — overriding those makes things worse.
+
+---
+
+## Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `ompcode.ompPath` | `omp` | Path to the omp binary. |
+| `ompcode.language` | `auto` | Chat language: `auto`, `en`, `ru`. |
+| `ompcode.defaultModel` | `""` | `provider/modelId` selected on start, fuzzy matched. |
+| `ompcode.verifyModels` | `true` | Probe each model once and hide the ones that fail. |
+| `ompcode.thinkingLevel` | `auto` | `off`…`max`, or `auto`. |
+| `ompcode.approvalMode` | `always-ask` | `always-ask`, `write`, `yolo`. |
+| `ompcode.modelProfiles` | `[]` | Per-family behaviour rows, layered over the built-ins. |
+| `ompcode.customProviders` | `{}` | Extra providers merged into `models.yml`. |
+| `ompcode.resumeLastSession` | `false` | New chats continue the most recent session. |
+| `ompcode.hideStartupNotices` | `true` | Suppress the agent's boot chatter. |
+| `ompcode.theme` | `violet` | Accent palette: violet, coral, emerald, amber, magenta. |
+| `ompcode.accentColor` | `""` | Any CSS colour, overriding the palette. |
+
+---
+
+## Commands and shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Cmd/Ctrl+Alt+O` | Open the chat in an editor tab |
+| `Cmd/Ctrl+Alt+N` | New chat tab |
+| `Cmd/Ctrl+Alt+L` | Send the editor selection to the chat |
+| `Shift+Enter` | Newline in the composer |
+| `Esc` | Interrupt the current turn |
+| `↑` | Previous prompt |
+
+All sixteen commands live under **OMP Code:** in the palette — sign-in, keys, models.yml,
+diagnostics, restart, export, history.
+
+---
+
+## Custom providers
+
+Any OpenAI-compatible endpoint, via `ompcode.customProviders`, merged into
+`~/.omp/agent/models.yml` before each start (comments preserved):
+
+```json
+"ompcode.customProviders": {
+  "akemi": {
+    "baseUrl": "http://host:8000/v1",
+    "api": "openai-completions",
+    "models": [
+      { "id": "akemi-1", "name": "Akemi", "contextWindow": 128000, "maxTokens": 32000 }
+    ]
+  }
 }
 ```
 
-You can also edit `models.yml` directly: **OMP Code: Open models.yml (Custom Providers)**.
+Its API key belongs in Secret Storage, not the settings file:
+`OMP Code: Set Custom Provider API Key`.
 
-Файл `models.yml` можно править и напрямую: **OMP Code: Open models.yml (Custom Providers)**.
+---
 
-## Usage / Использование
+## Language
 
-- Click the ✳ **OMP Code** icon in the Activity Bar and type a prompt. `Enter` sends, `Shift+Enter` inserts a newline, `Esc` interrupts a running turn.
-- The **＋** button (topbar or view title) opens a new chat as its own **editor tab** — each tab runs an independent agent session and is closed/killed with the tab. The ⚙ menu has sign-in, API keys, compact, restart and "Clear this session".
-- Type `/` to see the agent's slash commands.
-- The chips under the input switch the **model** and the **thinking level**; the context chip shows context usage.
-- Tool calls (Bash, file edits, etc.) render as collapsible cards; approval requests appear as **Allow / Deny** dialogs (see `ompcode.approvalMode`).
-- **Attach files** three ways: the 📎 button in the composer, `Ctrl/Cmd+V` with a file on the clipboard, or dragging files onto the panel **while holding Shift** (VS Code only forwards a drop into a webview with Shift held). Attachments show as chips above the input and are sent to the agent as absolute paths, so nothing is pasted into the context window. Files without a path of their own (clipboard screenshots, Finder drags) are copied into the extension's storage first; anything above 20 MB is rejected.
-- The palette is set by `ompcode.theme` (violet, coral, emerald, amber, magenta) and can be overridden with any CSS color via `ompcode.accentColor`. Both apply instantly, without restarting the agent.
-- Commands: **New Chat Tab**, **Restart Agent** (restarts every open session; the agent also restarts automatically when any `ompcode.*` setting changes).
-- **Editor → chat**: select code and run **OMP Code: Add Selection to Chat** (editor context menu, `Ctrl/Cmd+Alt+L`) — the selection lands as a chip (`file.ts:10-25`) and is inlined into the prompt with its line range. A ghost chip in the composer always shows the active editor file.
-- **@-mentions**: type `@` in the composer to autocomplete workspace files; picking one attaches it as a chip with a validated absolute path.
-- **Keyboard shortcuts**: `Ctrl/Cmd+Alt+O` open chat, `Ctrl/Cmd+Alt+N` new chat tab, `Ctrl/Cmd+Alt+L` add selection to chat. `↑` at the start of an empty composer recalls previously sent prompts (shell-style).
-- **Edit feedback loop**: after an edit/write tool runs, its card gets a **diff** button (before ↔ current, via `vscode.diff`), and new language-server diagnostics surface as a warning notice.
-- **Code blocks** carry two buttons: **copy** and **insert** (at the editor cursor).
-- **Status bar** shows the current model and context fill; click opens the chat. After each run a chip shows session tokens/cost (`↑in ↓out $cost`).
-- **Crash recovery**: a crashed agent is auto-restarted once after 1 s; the manual Restart banner appears only if that fails (missing keys/models skip auto-restart and show the setup card).
-- **Multi-root workspaces**: opening a new chat tab asks which folder its agent should work in (per-tab cwd).
-- **Export**: ⚙ → **Export transcript as Markdown** saves the conversation via `get_messages`.
-- **Notifications**: a turn that ran over 15 s while VS Code was unfocused ends with a native notification.
-- **History**: the history panel has a filter box matching title, preview, folder and model.
+The interface ships in English and Russian. `ompcode.language` (`auto` by default) is
+**separate from the VS Code display language**, so an English editor can hold a Russian
+chat with no Language Pack installed. Command titles and setting descriptions are read by
+VS Code before the extension loads, so those alone follow the editor.
 
-- Нажмите значок ✳ **OMP Code** в панели активности и введите запрос. `Enter` — отправить, `Shift+Enter` — перенос строки, `Esc` — прервать выполнение.
-- Кнопка **＋** (в чате или в заголовке панели) открывает новый чат **вкладкой в редакторе** — у каждой вкладки своя независимая сессия агента; закрытие вкладки останавливает её процесс. В меню ⚙ — вход через подписку, API-ключи, compact, рестарт и «Clear this session».
-- Введите `/`, чтобы увидеть slash-команды агента.
-- Чипы под полем ввода переключают **модель** и **уровень размышлений**; чип контекста показывает заполненность контекста.
-- Вызовы инструментов (Bash, правки файлов и т.д.) отображаются сворачиваемыми карточками; запросы на подтверждение — диалогами **Allow / Deny** (см. `ompcode.approvalMode`).
-- **Вложения** — тремя способами: кнопка 📎 в поле ввода, `Ctrl/Cmd+V` с файлом в буфере обмена или перетаскивание файлов в панель **с зажатым Shift** (VS Code пробрасывает drop в webview только с Shift). Вложения показываются чипами над полем ввода и передаются агенту абсолютными путями — содержимое не вставляется в контекст. Файлы без собственного пути (скриншот из буфера, перетаскивание из Finder) сначала копируются в хранилище расширения; больше 20 МБ — отклоняются.
-- Цветовая гамма задаётся настройкой `ompcode.theme` (violet, coral, emerald, amber, magenta), свой цвет — `ompcode.accentColor`. Применяется сразу, без перезапуска агента.
-- Команды: **New Chat Tab**, **Restart Agent** (перезапускает все открытые сессии; агент также перезапускается автоматически при изменении любой настройки `ompcode.*`).
-- **Редактор → чат**: выделите код и выполните **OMP Code: Add Selection to Chat** (контекстное меню редактора, `Ctrl/Cmd+Alt+L`) — выделение станет чипом (`file.ts:10-25`) и попадёт в промпт с диапазоном строк. Призрачный чип в композере всегда показывает активный файл.
-- **@-упоминания**: введите `@` в композере — автодополнение файлов workspace; выбор прикрепляет файл чипом с проверенным абсолютным путём.
-- **Горячие клавиши**: `Ctrl/Cmd+Alt+O` открыть чат, `Ctrl/Cmd+Alt+N` новая вкладка, `Ctrl/Cmd+Alt+L` выделение в чат. `↑` в начале пустого поля листает отправленные промпты.
-- **Фидбек правок**: после edit/write-инструмента на карточке появляется кнопка **diff** (до ↔ после через `vscode.diff`), а новые диагностики языкового сервера показываются предупреждением.
-- **Блоки кода** имеют кнопки **copy** и **insert** (в позицию курсора редактора).
-- **Статус-бар** показывает модель и заполнение контекста; клик открывает чат. После каждого прогона чип показывает токены/стоимость сессии (`↑in ↓out $cost`).
-- **Восстановление после сбоя**: упавший агент перезапускается автоматически один раз через 1 с; баннер с ручным Restart — только если не помогло (при отсутствии ключей/моделей авто-рестарт пропускается).
-- **Multi-root**: при открытии новой вкладки чата спрашивает, в какой папке работать её агенту (cwd на вкладку).
-- **Экспорт**: ⚙ → **Export transcript as Markdown** сохраняет диалог через `get_messages`.
-- **Уведомления**: ход длиннее 15 с при нефокусированном окне завершается нативным уведомлением.
-- **История**: в панели истории есть фильтр по названию, превью, папке и модели.
+---
 
-### Language / Язык
+## Platforms
 
-The chat interface ships in English and Russian. `ompcode.language` (`auto` by default) is separate from the VS Code display language, so an English editor can hold a Russian chat — no Language Pack needed. Command titles and setting descriptions are read by VS Code before the extension loads, so those follow the editor's own language.
+Plain JavaScript, no native modules — the `.vsix` installs on macOS, Linux and Windows.
+Only the `omp` CLI has native parts, and it ships `darwin-arm64`, `darwin-x64`,
+`linux-x64`, `linux-arm64` and `win32-x64`. **Windows on ARM is not supported**, because
+omp publishes no `win32-arm64` build.
 
-Интерфейс чата есть на английском и русском. Настройка `ompcode.language` (по умолчанию `auto`) не зависит от языка интерфейса VS Code — редактор может остаться английским, а чат быть русским, Language Pack не нужен. Названия команд и описания настроек VS Code читает до загрузки расширения, поэтому они следуют языку самого редактора.
+On Windows a global install can leave `omp.cmd` rather than `omp.exe`. Since 0.5.0 the
+extension resolves the path the way Windows does (`PATH` × `PATHEXT`) and starts a batch
+shim through `cmd.exe`, quoting the command line itself — nothing to configure.
 
-## Settings / Настройки
+---
 
-| Setting | Default | Description |
-| --- | --- | --- |
-| `ompcode.ompPath` | `omp` | Path to the omp binary / путь к бинарнику omp |
-| `ompcode.language` | `auto` | Chat interface language / язык интерфейса чата: `auto`, `en`, `ru` |
-| `ompcode.customProviders` | `{}` | Providers merged into models.yml / провайдеры для models.yml |
-| `ompcode.defaultModel` | `""` | `provider/modelId` selected on start / модель по умолчанию |
-| `ompcode.thinkingLevel` | `auto` | off…max, auto / уровень размышлений |
-| `ompcode.approvalMode` | `always-ask` | `always-ask` \| `write` \| `yolo` |
-| `ompcode.theme` | `violet` | Accent palette / цветовая гамма: violet, coral, emerald, amber, magenta |
-| `ompcode.accentColor` | `""` | Custom accent CSS color / свой цвет акцента, например `#8B7BF7` |
-| `ompcode.modelProfiles` | `[]` | Per-family behaviour rows layered over the built-ins / профили поведения под семейства моделей |
-| `ompcode.resumeLastSession` | `false` | New chats resume the most recent session / новые чаты продолжают последнюю сессию |
+## When something does not work
 
+Run **OMP Code: Run Diagnostics** from the palette. It reports the resolved binary path,
+`omp --version`, whether the handshake completes, which providers hold a credential, which
+models the agent offers and the last verification verdicts — with no key values in it,
+so it is safe to paste into an issue.
 
-## Contributing / Разработка
+The usual answers it gives:
+
+- **"Cannot find the omp binary"** — the CLI is not installed, or not on the `PATH` VS Code
+  sees. Set `ompcode.ompPath` to the full path.
+- **Nothing answers, everything 401** — a stale key. Clear it with
+  `OMP Code: Clear Stored API Key`; subscription sign-ins are unaffected.
+- **The model list is short** — verification hid the ones that failed. The picker's
+  *Show all models* reveals them, and *Re-check subscriptions* re-runs the probe.
+
+---
+
+## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — setup, the test suite, and the protocol details
-that are expensive to rediscover. Release notes live in [CHANGELOG.md](CHANGELOG.md).
+that are expensive to rediscover. Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
-Сборка, тесты и грабли протокола — в [CONTRIBUTING.md](CONTRIBUTING.md);
-история версий — в [CHANGELOG.md](CHANGELOG.md).
-
-## License / Лицензия
+## License
 
 [MIT](LICENSE) © Ilona Pushilina

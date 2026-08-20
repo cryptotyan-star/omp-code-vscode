@@ -53,6 +53,18 @@ Press `F5` in VS Code to launch an Extension Development Host with the extension
   shows up as "the model never answers", because the error is swallowed by the
   host-message handler. `test/webviewWiring.test.ts` guards this.
 
+## Screenshots
+
+`docs/images/*.png` are captured by serving `media/` over http with a page that stubs
+`acquireVsCodeApi` and injects a VS Code dark palette, then driving it with Playwright:
+`window.postMessage({t: "profile", profile})` and friends put the panel into the state you
+want, and the panel is photographed at a 560px viewport. The skeleton for that page is the
+one `getHtml` builds in `src/ompSession.ts`, with the template expressions substituted.
+
+That harness is not committed — it needs Playwright, which is not a dependency here — but
+it is the only way to photograph a webview without a running VS Code, and it doubles as a
+way to test the UI by hand.
+
 ## Reporting a bug
 
 Run **OMP Code: Run Diagnostics** from the command palette and attach the report. It shows
