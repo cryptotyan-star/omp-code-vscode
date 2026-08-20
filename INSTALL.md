@@ -11,12 +11,12 @@
 2. **Установите расширение — одна кнопка:**
    - Откройте VS Code → вкладка **Extensions** (`Cmd+Shift+X` / `Ctrl+Shift+X`)
    - Кнопка `...` в правом верхнем углу панели → **Install from VSIX...**
-   - Выберите `omp-code-0.5.0.vsix` из этой папки
+   - Выберите файл `omp-code-*.vsix` из этой папки
    - Перезапустите VS Code / нажмите **Reload Window**
 
    Либо из терминала:
    ```bash
-   code --install-extension omp-code-0.5.0.vsix
+   code --install-extension omp-code-<version>.vsix
    ```
 
    **Если у вас уже стояла версия 0.4.0 или раньше** — удалите её, иначе получите две
@@ -66,12 +66,12 @@
 2. **Install the extension — one button:**
    - Open VS Code → **Extensions** view (`Cmd+Shift+X` / `Ctrl+Shift+X`)
    - `...` menu (top-right of the panel) → **Install from VSIX...**
-   - Pick `omp-code-0.5.0.vsix` from this folder
+   - Pick the `omp-code-*.vsix` file from this folder
    - Restart VS Code / click **Reload Window**
 
    Or from a terminal:
    ```bash
-   code --install-extension omp-code-0.5.0.vsix
+   code --install-extension omp-code-<version>.vsix
    ```
 
    **If you already had 0.4.0 or earlier**, remove it first or you end up with two copies:
