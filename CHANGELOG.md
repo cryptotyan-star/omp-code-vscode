@@ -12,6 +12,19 @@ All notable changes to OMP Code. Versions follow [semantic versioning](https://s
   itself, because it resolves those before the extension loads.
 - `npm run dist` builds the hand-out archive (`.vsix` plus sources) reproducibly.
 
+### Changed
+
+- **The extension id changed** from `local.omp-code` to `cryptotyan-star.omp-code`, because
+  the old publisher was a placeholder. VS Code identifies an extension by
+  `<publisher>.<name>`, so this installs *alongside* an earlier build rather than
+  upgrading it: two copies means two icons in the editor title bar and every command
+  listed twice. Remove the old one with
+  `code --uninstall-extension local.omp-code`, then reload the window.
+
+  API keys are the one thing that does not carry over — VS Code scopes Secret Storage per
+  extension id, so they have to be entered again. Subscription sign-ins are unaffected;
+  those credentials belong to the `omp` agent, not to the extension.
+
 ### Fixed
 
 - **Windows: `omp` installed as a batch shim now starts.** A global install can leave

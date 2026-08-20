@@ -19,6 +19,20 @@
    code --install-extension omp-code-0.5.0.vsix
    ```
 
+   **Если у вас уже стояла версия 0.4.0 или раньше** — удалите её, иначе получите две
+   копии сразу: у расширения сменился идентификатор (`local.omp-code` →
+   `cryptotyan-star.omp-code`), а VS Code считает разные идентификаторы разными
+   расширениями. Признак — две одинаковые иконки ✳ в заголовке редактора и задвоенные
+   команды в палитре.
+
+   ```bash
+   code --uninstall-extension local.omp-code
+   ```
+
+   После этого перезагрузите окно (**Reload Window**). API-ключи придётся ввести заново:
+   VS Code хранит их отдельно для каждого идентификатора расширения. Входы по подписке
+   (Claude, Kimi Code) не затрагиваются — их хранит сам агент `omp`.
+
 3. **Войдите / добавьте ключ** — палитра команд (`Cmd+Shift+P`), любое из:
    - `OMP Code: Sign in with Claude (Subscription)` — OAuth, Claude Pro/Max
    - `OMP Code: Sign in with Kimi Code (Subscription)` — OAuth
@@ -59,6 +73,18 @@
    ```bash
    code --install-extension omp-code-0.5.0.vsix
    ```
+
+   **If you already had 0.4.0 or earlier**, remove it first or you end up with two copies:
+   the extension id changed (`local.omp-code` → `cryptotyan-star.omp-code`) and VS Code
+   treats different ids as different extensions. The symptom is two identical ✳ icons in
+   the editor title bar and every command listed twice.
+
+   ```bash
+   code --uninstall-extension local.omp-code
+   ```
+
+   Then reload the window. API keys need entering again — VS Code scopes them per
+   extension id. Subscription sign-ins are unaffected; the `omp` agent owns those.
 
 3. **Sign in / add a key** — Command Palette (`Cmd+Shift+P`), any of:
    - `OMP Code: Sign in with Claude (Subscription)` — OAuth, Claude Pro/Max
