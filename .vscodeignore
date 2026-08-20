@@ -6,10 +6,11 @@ src/**
 node_modules/**
 esbuild.mjs
 tsconfig.json
-SPEC.md
 **/*.map
 **/*.ts
 *.vsix
+*.zip
+*.bundle
 bun.lockb
 package-lock.json
 yarn.lock
@@ -20,3 +21,5 @@ scripts/**
 INSTALL.md
 .gitattributes
 HANDOFF.md
+CONTRIBUTING.md
+.github/**

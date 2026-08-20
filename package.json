@@ -3,17 +3,17 @@
   "displayName": "OMP Code",
   "description": "%extension.description%",
   "version": "0.5.0",
-  "publisher": "local",
-  "author": "OMP Code contributors",
+  "publisher": "cryptotyan-star",
+  "author": "Ilona Pushilina",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/oh-my-pi/omp-code"
+    "url": "https://github.com/cryptotyan-star/omp-code-vscode.git"
   },
   "bugs": {
-    "url": "https://github.com/oh-my-pi/omp-code/issues"
+    "url": "https://github.com/cryptotyan-star/omp-code-vscode/issues"
   },
-  "homepage": "https://github.com/oh-my-pi/omp-code#readme",
+  "homepage": "https://github.com/cryptotyan-star/omp-code-vscode#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -21,6 +21,18 @@
     "AI",
     "Chat",
     "Other"
+  ],
+  "keywords": [
+    "ai",
+    "chat",
+    "coding agent",
+    "omp",
+    "oh-my-pi",
+    "claude",
+    "anthropic",
+    "glm",
+    "qwen",
+    "kimi"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -283,7 +295,7 @@
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.21.5",
+    "esbuild": "^0.25.12",
     "typescript": "^5.4.5"
   }
 }

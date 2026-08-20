@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the extension does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The extension is a GUI over the `omp` CLI. Most "nothing works" reports turn out
+        to be the agent, not the UI — the diagnostics report below tells the two apart in
+        one step, so please include it.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics report
+      description: >
+        Command palette → **OMP Code: Run Diagnostics**, then paste the whole report.
+        It contains no key values — only which providers hold a credential.
+      render: markdown
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Extension version, VS Code version, OS, and `omp --version`.
+      placeholder: "OMP Code 0.5.0, VS Code 1.99, macOS 15, omp 17.3.5"
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output channel
+      description: >
+        View → Output → **OMP Code**. Paste anything relevant, especially lines starting
+        with `[omp]`.
+      render: shell
+    validations:
+      required: false

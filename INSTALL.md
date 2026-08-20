@@ -35,7 +35,7 @@
 в палитре и описания настроек VS Code читает до загрузки расширения, поэтому они
 следуют языку самого редактора.
 
-Полная документация, кастомные провайдеры, все настройки — `README.md` и `SPEC.md` в этом архиве.
+Полная документация, кастомные провайдеры, все настройки — `README.md` в этом архиве.
 
 Исходники — в `src/`, `media/`; чтобы пересобрать после правок: `npm install && npm run build && npm run package` (нужны Node.js 18+, npm).
 
@@ -76,7 +76,7 @@ editor can hold a Russian chat — no Language Pack needed. Command titles and
 setting descriptions are read by VS Code before the extension loads, so those
 follow the editor's own language.
 
-Full docs, custom providers, all settings — see `README.md` and `SPEC.md` in this archive.
+Full docs, custom providers, all settings — see `README.md` in this archive.
 
 Source lives in `src/`, `media/`; to rebuild after edits: `npm install && npm run build && npm run package` (needs Node.js 18+, npm).
 

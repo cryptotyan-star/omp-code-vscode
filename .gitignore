@@ -8,3 +8,7 @@ out/
 .vscode-test/
 coverage/
 .playwright-mcp/
+
+# Local working notes — session context, not for publication
+HANDOFF.md
+*.bundle

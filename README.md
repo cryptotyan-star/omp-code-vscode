@@ -1,8 +1,24 @@
 # OMP Code
 
+[![CI](https://github.com/cryptotyan-star/omp-code-vscode/actions/workflows/ci.yml/badge.svg)](https://github.com/cryptotyan-star/omp-code-vscode/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![VS Code ^1.85](https://img.shields.io/badge/VS%20Code-%5E1.85-007ACC.svg)](https://code.visualstudio.com/)
+
 Claude Code-style chat in the VS Code sidebar, powered by the [`omp`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent) (oh-my-pi) coding agent over RPC. Works with the Anthropic Cloud API and any custom OpenAI-compatible provider.
 
 Чат в стиле Claude Code в боковой панели VS Code поверх CLI-агента `omp` (oh-my-pi). Поддерживает Anthropic Cloud API и любые кастомные OpenAI-совместимые провайдеры.
+
+The extension is a GUI and nothing else: every model call, tool call and session belongs
+to the `omp` CLI, which you install separately. Without that binary it does not start.
+
+Расширение — только GUI: все вызовы моделей, инструментов и сессии принадлежат CLI `omp`,
+который ставится отдельно. Без него расширение не стартует.
+
+> **Not affiliated** with the oh-my-pi project, Anthropic, or any model provider. This is
+> an independent client that talks to the `omp` CLI over its RPC interface.
+>
+> **Не аффилировано** с проектом oh-my-pi, Anthropic и любым провайдером моделей — это
+> независимый клиент, общающийся с CLI `omp` по его RPC-интерфейсу.
 
 ---
 
@@ -22,11 +38,22 @@ Claude Code-style chat in the VS Code sidebar, powered by the [`omp`](https://ww
 
    На Windows `.cmd`-обёртка запускается через `cmd.exe` автоматически; если установка лежит вне `PATH`, укажите `ompcode.ompPath` на `omp.exe` или `omp.cmd`. Windows ARM не поддерживается — сборки omp под него нет.
 
-2. Install the extension (`.vsix`) / Установите расширение (`.vsix`):
+2. Install the extension / Установите расширение:
+
+   Download the `.vsix` from [Releases](https://github.com/cryptotyan-star/omp-code-vscode/releases) and either drop it on the Extensions
+   view, or run:
+
+   Скачайте `.vsix` из [Releases](https://github.com/cryptotyan-star/omp-code-vscode/releases) и либо перетащите в панель Extensions,
+   либо выполните:
+
+   ```bash
+   code --install-extension omp-code-<version>.vsix
+   ```
+
+   Building from source instead / Сборка из исходников:
 
    ```bash
    npm install && npm run build && npm run package
-   code --install-extension omp-code-0.1.0.vsix
    ```
 
 ## Sign in / Вход
@@ -143,3 +170,16 @@ The chat interface ships in English and Russian. `ompcode.language` (`auto` by d
 | `ompcode.theme` | `violet` | Accent palette / цветовая гамма: violet, coral, emerald, amber, magenta |
 | `ompcode.accentColor` | `""` | Custom accent CSS color / свой цвет акцента, например `#8B7BF7` |
 | `ompcode.resumeLastSession` | `false` | New chats resume the most recent session / новые чаты продолжают последнюю сессию |
+
+
+## Contributing / Разработка
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — setup, the test suite, and the protocol details
+that are expensive to rediscover. Release notes live in [CHANGELOG.md](CHANGELOG.md).
+
+Сборка, тесты и грабли протокола — в [CONTRIBUTING.md](CONTRIBUTING.md);
+история версий — в [CHANGELOG.md](CHANGELOG.md).
+
+## License / Лицензия
+
+[MIT](LICENSE) © Ilona Pushilina
