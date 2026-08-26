@@ -25,10 +25,18 @@ import {
   type ProbeCandidate,
   type ProbeResults,
 } from "./probe";
-import { KEYED_PROVIDERS } from "./providers";
+import { KEYED_PROVIDERS, LOGIN_PROVIDERS } from "./providers";
 import { needsManualLoad, readInstructionFile } from "./instructionFiles";
 import { currentBundle, currentLanguage, t } from "./l10n.ts";
 import { overlayArgs, writeAppendPrompt, writeOverlay } from "./profileOverlay";
+import { planRevert, revertStateHash } from "./revert";
+import {
+  type ApprovalResponse,
+  type JsonValue,
+  type RemoteCommand,
+} from "./remoteProtocol.ts";
+import { requireCanonicalRemotePath } from "./remotePathPolicy.ts";
+import { ApprovalNotPendingError, claimPendingApproval } from "./remoteApproval.ts";
 import {
   applyProfileFieldEdit,
   builtinMatchForFamily,
@@ -54,10 +62,52 @@ const PROBE_STATE_KEY = "ompcode.probeResults";
 export const APPROVAL_MODES = ["always-ask", "write", "yolo"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
+/** One row of the session board — a live OmpSession reduced to display data. */
+export interface SessionInfo {
+  /** Stable identity of the session (the board's row key). */
+  id: string;
+  /** Title the agent set via `setTitle`, "" before the first one. */
+  title: string;
+  /** Folder the agent works in — disambiguates same-named chats in multi-root. */
+  cwd: string;
+  /** Selected model id, "" before the first state frame. */
+  model: string;
+  provider: string;
+  /** Board-facing lifecycle: startup, an approval waiting, a running turn, idle. */
+  status: "starting" | "asks" | "working" | "idle";
+  /** Session cost in dollars from the last get_session_stats. */
+  cost: number;
+  /** False for the sidebar session — its surface cannot be closed. */
+  closable: boolean;
+}
+
+/** Sanitized messages mirrored to an authenticated Remote Control device. */
+export interface RemoteSessionMessage {
+  sessionId: string;
+  message: Record<string, unknown>;
+}
+
 interface WebviewMessage {
   t?: string;
   [key: string]: unknown;
 }
+
+/**
+ * VS Code commands the composer's own slash commands may run.
+ *
+ * Only the local webview can reach this: a paired phone speaks the typed
+ * RemoteCommand protocol, which has no passthrough for raw webview messages.
+ * The allowlist is what keeps that true if a passthrough is ever added --
+ * `ompcode.remoteStart` mints a fresh pairing secret, so a phone must never
+ * be able to ask for one.
+ */
+const PANEL_SLASH_COMMANDS: ReadonlySet<string> = new Set([
+  "ompcode.remoteStart",
+  "ompcode.remoteStartAllSessions",
+  "ompcode.remoteRefreshPairing",
+  "ompcode.remoteStatus",
+  "ompcode.remoteStop",
+]);
 
 export interface OmpSessionCallbacks {
   /** Asked by the webview to open a new chat tab (topbar ＋). */
@@ -68,6 +118,8 @@ export interface OmpSessionCallbacks {
   onState?: (state: unknown) => void;
   /** Bring this session's UI to the front (notification "Open chat"). */
   onReveal?: () => void;
+  /** Close this session's UI surface — the board's per-row close action. */
+  onClose?: () => void;
 }
 
 /**
@@ -82,11 +134,32 @@ export interface DiffStore {
 interface ToolSnapshot {
   path: string;
   before: string;
+  existedBefore: boolean;
+  /** File state immediately after tool_execution_end; absent if it could not be read. */
+  afterHash?: string;
+}
+
+/** One routed prompt, held until its original model has been restored. */
+interface RoutedTurn {
+  proc: OmpProcess;
+  restore: { provider: string; modelId: string };
+  done: Promise<void>;
+  resolve: () => void;
+  restoring?: Promise<void>;
 }
 
 /** Identity of a diagnostic for before/after delta — position + text. */
 function diagKey(d: vscode.Diagnostic): string {
   return `${d.range.start.line}:${d.range.start.character}:${d.severity}:${d.message}`;
+}
+
+function isEnoent(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function toRemoteJson(value: unknown): JsonValue {
+  if (value === undefined) return null;
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 /**
@@ -95,6 +168,7 @@ function diagKey(d: vscode.Diagnostic): string {
  */
 export class OmpSession implements vscode.Disposable {
   private static readonly active = new Set<OmpSession>();
+  private static remoteMessageEmitter: vscode.EventEmitter<RemoteSessionMessage> | undefined;
 
   /** Run fn for every live session (config-change restarts, key updates). */
   static forEachActive(fn: (session: OmpSession) => void): void {
@@ -109,6 +183,14 @@ export class OmpSession implements vscode.Disposable {
       return session;
     }
     return undefined;
+  }
+
+  /** Same host-side UI feed the webview consumes; never accepts data back. */
+  static get onRemoteMessage(): vscode.Event<RemoteSessionMessage> {
+    if (!OmpSession.remoteMessageEmitter) {
+      OmpSession.remoteMessageEmitter = new vscode.EventEmitter<RemoteSessionMessage>();
+    }
+    return OmpSession.remoteMessageEmitter.event;
   }
 
   private webview: vscode.Webview | undefined;
@@ -141,10 +223,127 @@ export class OmpSession implements vscode.Disposable {
 
   /** "Before" contents of files touched by edit/write tools, by toolCallId. */
   private readonly diffSnaps = new Map<string, ToolSnapshot>();
+  /** Snapshot reads may still be running when the matching tool-end arrives. */
+  private readonly snapshotJobs = new Map<string, Promise<void>>();
   /** Diagnostics captured before the first pending edit, by file path. */
   private readonly diagBaseline = new Map<string, Set<string>>();
   /** Trailing debounce per file so a burst of edits reports once. */
   private readonly diagTimers = new Map<string, NodeJS.Timeout>();
+
+  /** Prompts and model mutations are ordered per session. */
+  private modelOperationQueue: Promise<void> = Promise.resolve();
+  /** Routed transaction held through agent_end and restoration. */
+  private routedTurn: RoutedTurn | undefined;
+  /** Covers the prompt-ack → agent_start gap as well as an actively streaming turn. */
+  private turnPendingOrActive = false;
+  /** A published session outlives a closed editor surface until Remote Control releases it. */
+  private remoteLeaseCount = 0;
+  private surfaceClosed = false;
+  private fullyDisposed = false;
+
+  // ------------------------------------------------------------- session board
+
+  /** Modal approval dialogs queued or on screen, by request id — the board's "asks" state. */
+  private readonly uiPendingIds = new Set<string>();
+  /** Original closed-schema request needed to validate a remote response. */
+  private readonly uiPendingFrames = new Map<string, OmpFrame>();
+  /** Last session cost in dollars from get_session_stats. */
+  private lastCost = 0;
+  /** Title the agent set for this session (`setTitle`), if any. */
+  private sessionTitle = "";
+  /** Stable identity for the board; random, never persisted. */
+  private readonly sessionId = crypto.randomUUID();
+  /** Change feed the session board listens to. */
+  private static boardEmitter: vscode.EventEmitter<void> | undefined;
+
+  private static boardChanges(): vscode.EventEmitter<void> {
+    if (!OmpSession.boardEmitter) {
+      OmpSession.boardEmitter = new vscode.EventEmitter<void>();
+    }
+    return OmpSession.boardEmitter;
+  }
+
+  /** Fires whenever any board-visible field of any session may have moved. */
+  static get onBoardChange(): vscode.Event<void> {
+    return OmpSession.boardChanges().event;
+  }
+
+  private static notifyBoard(): void {
+    OmpSession.boardChanges().fire();
+  }
+
+  /** Board row data for this session. */
+  snapshot(): SessionInfo {
+    return {
+      id: this.sessionId,
+      title: this.sessionTitle,
+      cwd: this.workspaceCwd(),
+      model:
+        this.activeModel?.id ??
+        (this.activeModel?.provider ? String(this.activeModel.provider) : ""),
+      provider: this.activeModel?.provider ?? "",
+      status: !this.initialized
+        ? "starting"
+        : this.uiPendingIds.size > 0
+          ? "asks"
+          : this.streaming
+            ? "working"
+            : "idle",
+      cost: this.lastCost,
+      closable: !this.surfaceClosed && this.callbacks.onClose !== undefined,
+    };
+  }
+
+  /** Every live session, oldest first — the board's row order. */
+  static allSessions(): OmpSession[] {
+    return [...OmpSession.active];
+  }
+
+  /** Send the abort signal — the board's stop button. */
+  abort(): void {
+    this.proc?.send({ type: "abort" });
+  }
+
+  /** Close the session's UI surface when it has one. */
+  requestClose(): void {
+    this.callbacks.onClose?.();
+  }
+
+  /** Bring this session's chat surface to the front — the board's reveal action. */
+  reveal(): void {
+    if (!this.surfaceClosed) {
+      this.callbacks.onReveal?.();
+    }
+  }
+
+  get remoteSessionId(): string {
+    return this.sessionId;
+  }
+
+  get remoteWorkspaceRoot(): string {
+    return this.workspaceCwd();
+  }
+
+  get canRemoteClose(): boolean {
+    return this.callbacks.onClose !== undefined;
+  }
+
+  /** Hold the existing process; this never spawns a second `omp`. */
+  retainRemoteLease(): vscode.Disposable {
+    if (this.fullyDisposed) {
+      throw new Error("session is already disposed");
+    }
+    this.remoteLeaseCount += 1;
+    let released = false;
+    return new vscode.Disposable(() => {
+      if (released) return;
+      released = true;
+      this.remoteLeaseCount = Math.max(0, this.remoteLeaseCount - 1);
+      if (this.remoteLeaseCount === 0 && this.surfaceClosed) {
+        this.disposeNow();
+      }
+    });
+  }
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -155,6 +354,7 @@ export class OmpSession implements vscode.Disposable {
     private readonly sessionCwd?: string,
   ) {
     OmpSession.active.add(this);
+    OmpSession.notifyBoard();
   }
 
   /** Agent working directory: the picked folder, else the first workspace root. */
@@ -167,6 +367,28 @@ export class OmpSession implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.fullyDisposed) return;
+    // A panel can close while a phone is still controlling its live process.
+    // Detach only the surface; the final lease release performs real cleanup.
+    this.surfaceClosed = true;
+    this.detach();
+    if (this.remoteLeaseCount > 0) {
+      OmpSession.notifyBoard();
+      return;
+    }
+    this.disposeNow();
+  }
+
+  /** Extension shutdown must never leave an orphan child process. */
+  forceDispose(): void {
+    this.remoteLeaseCount = 0;
+    this.surfaceClosed = true;
+    this.disposeNow();
+  }
+
+  private disposeNow(): void {
+    if (this.fullyDisposed) return;
+    this.fullyDisposed = true;
     OmpSession.active.delete(this);
     this.messageSub?.dispose();
     this.messageSub = undefined;
@@ -178,7 +400,13 @@ export class OmpSession implements vscode.Disposable {
     const proc = this.proc;
     this.proc = undefined;
     this.initialized = false;
+    this.streaming = false;
+    this.turnPendingOrActive = false;
+    this.uiPendingIds.clear();
+    this.uiPendingFrames.clear();
+    this.abandonRoutedTurn();
     proc?.stop();
+    OmpSession.notifyBoard();
   }
 
   /**
@@ -186,6 +414,10 @@ export class OmpSession implements vscode.Disposable {
    * `webview.options` (enableScripts + localResourceRoots) beforehand.
    */
   attach(webview: vscode.Webview): void {
+    if (this.fullyDisposed) {
+      throw new Error("cannot attach a disposed OMP session");
+    }
+    this.surfaceClosed = false;
     if (this.webview === webview) {
       return;
     }
@@ -289,8 +521,15 @@ export class OmpSession implements vscode.Disposable {
     const proc = this.proc;
     this.proc = undefined;
     this.initialized = false;
+    this.streaming = false;
+    this.turnPendingOrActive = false;
+    this.turnStartedAt = 0;
     this.autoRestartAttempts = 0;
+    this.uiPendingIds.clear(); // dialogs of the dying process will never be answered
+    this.uiPendingFrames.clear();
+    this.abandonRoutedTurn(); // the restored model died with the process
     proc?.stop();
+    OmpSession.notifyBoard();
     try {
       await this.ensureStarted();
       // ensureStarted resolves once the child is spawned; initDone resolves
@@ -435,7 +674,14 @@ export class OmpSession implements vscode.Disposable {
     const stale = this.proc;
     this.proc = undefined;
     this.initialized = false;
+    this.streaming = false;
+    this.turnPendingOrActive = false;
+    this.turnStartedAt = 0;
+    this.uiPendingIds.clear();
+    this.uiPendingFrames.clear();
+    this.abandonRoutedTurn();
     stale?.stop();
+    OmpSession.notifyBoard();
 
     // Deferred settled by initialize() — gates prompts until the agent is negotiated.
     this.initDone = new Promise<void>((resolve, reject) => {
@@ -483,6 +729,13 @@ export class OmpSession implements vscode.Disposable {
         return;
       }
       this.initialized = false;
+      this.streaming = false;
+      this.turnPendingOrActive = false;
+      this.turnStartedAt = 0;
+      this.uiPendingIds.clear();
+      this.uiPendingFrames.clear();
+      this.abandonRoutedTurn();
+      OmpSession.notifyBoard();
       const detail = `agent exited (code ${code ?? "?"}${signal ? `, signal ${signal}` : ""})`;
       this.initReject?.(new Error(detail));
       this.output.appendLine(`[omp] ${detail}`);
@@ -526,6 +779,13 @@ export class OmpSession implements vscode.Disposable {
         return;
       }
       this.initialized = false;
+      this.streaming = false;
+      this.turnPendingOrActive = false;
+      this.turnStartedAt = 0;
+      this.uiPendingIds.clear();
+      this.uiPendingFrames.clear();
+      this.abandonRoutedTurn();
+      OmpSession.notifyBoard();
       const isEnoent = err.code === "ENOENT";
       const detail = isEnoent
         ? t(
@@ -563,15 +823,34 @@ export class OmpSession implements vscode.Disposable {
       void this.initialize(proc);
     } else if (frame.type === "agent_start") {
       this.streaming = true;
+      this.turnPendingOrActive = true;
       this.turnStartedAt = Date.now();
+      OmpSession.notifyBoard();
     } else if (frame.type === "agent_end") {
       this.streaming = false;
+      this.turnPendingOrActive = false;
       this.notifyTurnDone();
       void this.pushSessionStats();
+      void this.finishRoutedTurn(proc);
+      OmpSession.notifyBoard();
     } else if (frame.type === "tool_execution_start") {
-      void this.snapshotTool(frame);
+      const id = typeof frame.toolCallId === "string" ? frame.toolCallId : "";
+      const job = this.snapshotTool(frame);
+      if (id) {
+        this.snapshotJobs.set(id, job);
+        void job.then(() => {
+          if (this.snapshotJobs.get(id) === job) {
+            this.snapshotJobs.delete(id);
+          }
+        }, (err) => {
+          if (this.snapshotJobs.get(id) === job) {
+            this.snapshotJobs.delete(id);
+          }
+          this.output.appendLine(`[omp] edit snapshot failed: ${String(err)}`);
+        });
+      }
     } else if (frame.type === "tool_execution_end") {
-      this.finishToolSnapshot(frame);
+      void this.finishToolSnapshot(frame);
     }
     // Forward ALL non-response frames to the webview.
     this.post({ t: "frame", frame });
@@ -590,7 +869,39 @@ export class OmpSession implements vscode.Disposable {
       } else if (frame.method === "setTitle") {
         const title = typeof frame.title === "string" ? frame.title : undefined;
         if (title) {
+          this.sessionTitle = title;
           this.callbacks.onTitle?.(title);
+          OmpSession.notifyBoard();
+        }
+      } else if (
+        frame.method === "confirm" ||
+        frame.method === "select" ||
+        frame.method === "input" ||
+        frame.method === "editor"
+      ) {
+        // A modal approval dialog the webview will show — the board surfaces it.
+        const id = typeof frame.id === "string" ? frame.id : "";
+        if (id) {
+          this.uiPendingIds.add(id);
+          this.uiPendingFrames.set(id, frame);
+          OmpSession.notifyBoard();
+        }
+      } else if (frame.method === "cancel") {
+        // The agent withdraws a pending dialog; the webview drops it too, and
+        // no uiResponse will ever arrive for it.
+        const target =
+          (typeof frame.targetId === "string" && frame.targetId) ||
+          (typeof frame.requestId === "string" && frame.requestId) ||
+          (typeof frame.cancelId === "string" && frame.cancelId) ||
+          "";
+        if (target && claimPendingApproval(target, this.uiPendingIds, this.uiPendingFrames)) {
+          OmpSession.notifyBoard();
+          this.post({
+            t: "approvalResolved",
+            requestId: target,
+            outcome: "cancelled",
+            winner: "agent",
+          });
         }
       }
     }
@@ -614,6 +925,7 @@ export class OmpSession implements vscode.Disposable {
       const commands = this.extractList(commandsData, "commands");
       if (typeof (stateInit as Record<string, unknown>)?.isStreaming === "boolean") {
         this.streaming = (stateInit as Record<string, unknown>).isStreaming as boolean;
+        this.turnPendingOrActive = this.streaming;
       }
 
       const cfg = vscode.workspace.getConfiguration("ompcode");
@@ -665,14 +977,22 @@ export class OmpSession implements vscode.Disposable {
       this.initResolve?.();
       this.output.appendLine("[omp] agent ready");
       void this.verifyModels(models);
+      OmpSession.notifyBoard();
     } catch (err) {
       if (this.proc !== proc) {
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
+      this.initialized = false;
+      this.streaming = false;
+      this.turnPendingOrActive = false;
+      this.uiPendingIds.clear();
+      this.uiPendingFrames.clear();
+      this.abandonRoutedTurn();
       this.initReject?.(new Error(`init failed: ${message}`));
       this.output.appendLine(`[omp] init failed: ${message}`);
       this.post({ t: "proc", status: "error", detail: `init failed: ${message}` });
+      OmpSession.notifyBoard();
     }
   }
 
@@ -734,20 +1054,23 @@ export class OmpSession implements vscode.Disposable {
           if (!message) {
             return;
           }
-          try {
-            await this.ensureStarted();
-            if (!this.initialized) {
-              await this.initDone;
-            }
-            await this.request({
-              type: "prompt",
-              message,
-              streamingBehavior: this.streaming ? "steer" : undefined,
-            });
-          } catch (err) {
-            this.post({ t: "promptFailed" });
-            this.reportError("prompt", err);
-          }
+          const fm = msg.forModel;
+          const forModel =
+            fm === undefined
+              ? undefined
+              : {
+                  provider:
+                    fm && typeof fm === "object" &&
+                    typeof (fm as Record<string, unknown>).provider === "string"
+                      ? ((fm as Record<string, unknown>).provider as string).trim()
+                      : "",
+                  modelId:
+                    fm && typeof fm === "object" &&
+                    typeof (fm as Record<string, unknown>).modelId === "string"
+                      ? ((fm as Record<string, unknown>).modelId as string).trim()
+                      : "",
+                };
+          await this.promptOnce(message, forModel);
           return;
         }
         case "abort":
@@ -759,14 +1082,30 @@ export class OmpSession implements vscode.Disposable {
         case "openNewTab":
           this.callbacks.onOpenNewTab?.();
           return;
-        case "setModel":
-          await this.request({
-            type: "set_model",
-            provider: msg.provider,
-            modelId: msg.modelId,
-          });
-          await this.pushState();
+        case "runCommand": {
+          const command = typeof msg.command === "string" ? msg.command : "";
+          if (!PANEL_SLASH_COMMANDS.has(command)) {
+            return;
+          }
+          await vscode.commands.executeCommand(command);
           return;
+        }
+        case "setModel": {
+          const provider = typeof msg.provider === "string" ? msg.provider.trim() : "";
+          const modelId = typeof msg.modelId === "string" ? msg.modelId.trim() : "";
+          if (!provider || !modelId) {
+            return;
+          }
+          await this.queueModelOperation(async () => {
+            await this.ensureStarted();
+            if (!this.initialized) {
+              await this.initDone;
+            }
+            await this.request({ type: "set_model", provider, modelId });
+            await this.pushState();
+          });
+          return;
+        }
         case "setThinking":
           await this.request({ type: "set_thinking_level", level: msg.level });
           await this.pushState();
@@ -848,7 +1187,14 @@ export class OmpSession implements vscode.Disposable {
           return;
         case "uiResponse":
           if (msg.frame && typeof msg.frame === "object") {
-            this.proc?.send(msg.frame as Record<string, unknown>);
+            try {
+              this.deliverApprovalResponse(msg.frame as Record<string, unknown>, "desktop");
+            } catch (error) {
+              // A remote response may have won immediately before the local
+              // click reached the extension host. The resolved event already
+              // removes the desktop modal; never send a second response.
+              if (!(error instanceof ApprovalNotPendingError)) throw error;
+            }
           }
           return;
         case "openExternal":
@@ -889,6 +1235,9 @@ export class OmpSession implements vscode.Disposable {
         }
         case "openDiff":
           await this.openDiff(typeof msg.toolCallId === "string" ? msg.toolCallId : "");
+          return;
+        case "rejectEdit":
+          await this.revertEdit(typeof msg.toolCallId === "string" ? msg.toolCallId : "");
           return;
         case "pickFiles":
           await this.pickAttachments();
@@ -954,6 +1303,12 @@ export class OmpSession implements vscode.Disposable {
         }
         case "login": {
           const providerId = typeof msg.providerId === "string" ? msg.providerId : "anthropic";
+          // omp will happily start a credential flow for any provider it knows.
+          // The UI offers four; anything else arriving here is a bug or a probe.
+          if (!LOGIN_PROVIDERS.some((entry) => entry.id === providerId)) {
+            this.output.appendLine(`[omp] refused login for unsupported provider "${providerId}"`);
+            return;
+          }
           await this.loginProvider(providerId);
           return;
         }
@@ -1248,15 +1603,22 @@ export class OmpSession implements vscode.Disposable {
       return;
     }
     let before = "";
+    let existedBefore = true;
     try {
       before = await fs.readFile(filePath, "utf8");
-    } catch {
-      // File does not exist yet — the tool is creating it; diff against empty.
+    } catch (err) {
+      if (!isEnoent(err)) {
+        this.output.appendLine(`[omp] could not snapshot ${filePath}: ${String(err)}`);
+        return;
+      }
+      existedBefore = false;
+      // ENOENT specifically means the tool is creating this path. An existing
+      // empty file is represented by existedBefore:true, before:"".
     }
     if (before.length > 2_000_000) {
       return; // a diff this big helps nobody; skip rather than hoard memory
     }
-    this.diffSnaps.set(id, { path: filePath, before });
+    this.diffSnaps.set(id, { path: filePath, before, existedBefore });
     if (this.diffSnaps.size > 50) {
       const oldest = this.diffSnaps.keys().next().value;
       if (oldest !== undefined) {
@@ -1274,18 +1636,34 @@ export class OmpSession implements vscode.Disposable {
     }
   }
 
-  private finishToolSnapshot(frame: OmpFrame): void {
+  private async finishToolSnapshot(frame: OmpFrame): Promise<void> {
     const id = typeof frame.toolCallId === "string" ? frame.toolCallId : "";
+    if (id) {
+      await this.snapshotJobs.get(id)?.catch(() => {});
+    }
     const snap = id ? this.diffSnaps.get(id) : undefined;
     if (!id || !snap) {
       return;
     }
-    if (frame.isError) {
-      this.diffSnaps.delete(id);
-      return;
-    }
     if (this.diffStore) {
       this.post({ t: "diffAvailable", toolCallId: id, path: snap.path });
+    }
+    try {
+      let current: string | null;
+      try {
+        current = await fs.readFile(snap.path, "utf8");
+      } catch (err) {
+        if (!isEnoent(err)) {
+          throw err;
+        }
+        current = null;
+      }
+      snap.afterHash = revertStateHash(current);
+    } catch (err) {
+      // Keep the before-snapshot. Without a trustworthy final-state hash the
+      // revert will block, but a transient read failure must not erase the only
+      // recovery point.
+      this.output.appendLine(`[omp] could not finalize edit snapshot for ${snap.path}: ${String(err)}`);
     }
     this.scheduleDiagCheck(snap.path);
   }
@@ -1353,6 +1731,254 @@ export class OmpSession implements vscode.Disposable {
       vscode.Uri.file(snap.path),
       `${path.basename(snap.path)} (before ↔ current)`,
     );
+  }
+
+  /**
+   * Revert one edit/write tool call back to the before-snapshot taken just
+   * before the tool ran. A blocked/failed attempt retains the snapshot so the
+   * user can save/close the document or resolve drift and try again. Only a
+   * successful mutation (or an already-reverted no-op) consumes it.
+   */
+  private async revertEdit(toolCallId: string, enforcedPath?: string): Promise<boolean> {
+    const snap = this.diffSnaps.get(toolCallId);
+    if (!snap) {
+      this.post({
+        t: "frame",
+        frame: {
+          type: "notice",
+          level: "warning",
+          message: t("That edit snapshot is no longer available."),
+        },
+      });
+      return false;
+    }
+    const filePath = enforcedPath ?? snap.path;
+    const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === filePath);
+    let current: string | null;
+    try {
+      current = await fs.readFile(filePath, "utf8");
+    } catch (err) {
+      if (!isEnoent(err)) {
+        this.reportError("read file for reject edit", err);
+        return false;
+      }
+      current = null;
+    }
+    const plan = planRevert({
+      before: snap.before,
+      existedBefore: snap.existedBefore,
+      current,
+      dirty: doc?.isDirty === true,
+      afterHash: snap.afterHash,
+    });
+    if (plan.action === "blocked") {
+      this.output.appendLine(`[omp] reject edit blocked for ${filePath}: ${plan.reason ?? "unknown"}`);
+      this.post({
+        t: "frame",
+        frame: {
+          type: "notice",
+          level: "warning",
+          message:
+            plan.reason === "dirty"
+              ? t(
+                  "{0} has unsaved changes — save or close it before reverting.",
+                  path.basename(filePath),
+                )
+              : t("That edit snapshot is no longer available."),
+        },
+      });
+      return false;
+    }
+    try {
+      if (plan.action === "delete") {
+        await fs.unlink(filePath);
+      } else if (plan.action === "write" && plan.content !== undefined) {
+        await fs.writeFile(filePath, plan.content, "utf8");
+      }
+      if (plan.action !== "noop") {
+        this.post({
+          t: "frame",
+          frame: {
+            type: "notice",
+            level: "info",
+            message: t("Reverted {0}.", path.basename(filePath)),
+          },
+        });
+        this.post({ t: "editRejected", toolCallId });
+        this.scheduleDiagCheck(filePath);
+      }
+      if (plan.action === "noop") {
+        this.post({ t: "editRejected", toolCallId });
+      }
+      this.diffSnaps.delete(toolCallId);
+      return true;
+    } catch (err) {
+      this.reportError("reject edit", err);
+      return false;
+    }
+  }
+
+  /**
+   * One-shot routing (composer "route:" chip): send a single prompt through
+   * another model, then put the session back on the model it had. The queued
+   * operation stays open through agent_end and the restore RPC, so a following
+   * prompt or manual model selection cannot race the restoration.
+   */
+  private queueModelOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.modelOperationQueue.then(operation);
+    this.modelOperationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async promptOnce(
+    message: string,
+    forModel?: { provider: string; modelId: string },
+    reportFailure = true,
+  ): Promise<void> {
+    // Whether this send landed on a live turn. A failed steer must not make
+    // the webview tear down a turn that is still running.
+    let steer = false;
+    if (forModel && (!forModel.provider.trim() || !forModel.modelId.trim())) {
+      const error = new Error("routed prompt requires provider and modelId");
+      if (!reportFailure) throw error;
+      this.post({ t: "promptFailed", steer: false });
+      this.reportError("prompt", error);
+      return;
+    }
+    try {
+      await this.queueModelOperation(async () => {
+        await this.ensureStarted();
+        if (!this.initialized) {
+          await this.initDone;
+        }
+        const proc = this.proc;
+        if (!proc?.running) {
+          throw new Error("omp agent is not running");
+        }
+
+        if (!forModel) {
+          const steering = this.turnPendingOrActive || this.streaming;
+          steer = steering;
+          this.turnPendingOrActive = true;
+          try {
+            await proc.request({
+              type: "prompt",
+              message,
+              streamingBehavior: steering ? "steer" : undefined,
+            });
+          } catch (err) {
+            // State frames lag the agent, so omp may have started streaming
+            // since the last one and rejected a plain prompt as "already
+            // processing". A live turn is exactly what steer is for: retry
+            // once, and from here on report failures as steer failures.
+            const busy = (err instanceof Error ? err.message : String(err)).includes(
+              "already processing",
+            );
+            if (!steering && busy) {
+              steer = true;
+              await proc.request({ type: "prompt", message, streamingBehavior: "steer" });
+              return;
+            }
+            if (!steering) {
+              this.turnPendingOrActive = false;
+            }
+            throw err;
+          }
+          return;
+        }
+
+        // A routed send is a complete model transaction, not a steering
+        // message. Never switch models under an already-running turn.
+        if (this.routedTurn || this.turnPendingOrActive || this.streaming) {
+          throw new Error("cannot route a prompt while another turn is active");
+        }
+        const current = await this.currentModel();
+        if (!current) {
+          throw new Error("cannot route a prompt without a current model");
+        }
+
+        let resolveDone: () => void = () => {};
+        const done = new Promise<void>((resolve) => {
+          resolveDone = resolve;
+        });
+        const routed: RoutedTurn = {
+          proc,
+          restore: { provider: current.provider, modelId: current.id },
+          done,
+          resolve: resolveDone,
+        };
+        this.routedTurn = routed;
+        try {
+          await proc.request({
+            type: "set_model",
+            provider: forModel.provider.trim(),
+            modelId: forModel.modelId.trim(),
+          });
+          this.turnPendingOrActive = true;
+          await proc.request({ type: "prompt", message });
+          // `prompt` is acknowledged immediately. The transaction remains
+          // queued until agent_end has restored the original model.
+          await routed.done;
+        } catch (err) {
+          this.turnPendingOrActive = false;
+          await this.finishRoutedTurn(proc);
+          throw err;
+        }
+      });
+    } catch (err) {
+      if (!reportFailure) throw err;
+      this.post({ t: "promptFailed", steer });
+      this.reportError("prompt", err);
+    }
+  }
+
+  /** Put the session back on the model it had before a routed turn. */
+  private async finishRoutedTurn(proc: OmpProcess): Promise<void> {
+    const routed = this.routedTurn;
+    if (!routed || routed.proc !== proc) {
+      return;
+    }
+    if (!routed.restoring) {
+      routed.restoring = (async () => {
+        try {
+          if (this.proc === proc && proc.running) {
+            await proc.request({
+              type: "set_model",
+              provider: routed.restore.provider,
+              modelId: routed.restore.modelId,
+            });
+            if (this.proc === proc) {
+              await this.pushState();
+              this.post({ t: "routedDone" });
+            }
+          }
+        } catch (err) {
+          if (this.proc === proc) {
+            this.reportError("restore model", err);
+          }
+        } finally {
+          this.turnPendingOrActive = false;
+          if (this.routedTurn === routed) {
+            this.routedTurn = undefined;
+          }
+          routed.resolve();
+        }
+      })();
+    }
+    await routed.restoring;
+  }
+
+  /** A dead/restarted process needs no restore, but must release the queue. */
+  private abandonRoutedTurn(): void {
+    const routed = this.routedTurn;
+    if (!routed) {
+      return;
+    }
+    this.routedTurn = undefined;
+    routed.resolve();
   }
 
   // ------------------------------------------------------------ model probing
@@ -1482,31 +2108,33 @@ export class OmpSession implements vscode.Disposable {
     candidates: ProbeCandidate[],
   ): Promise<void> {
     try {
-      const current = await this.currentModel();
-      if (!current) {
-        return;
-      }
-      const verdict = results[modelKey(current.provider, current.id)];
-      if (!verdict || verdict.ok) {
-        return;
-      }
-      const usable = candidates.filter((m) => results[modelKey(m.provider, m.id)]?.ok);
-      const replacement =
-        usable.find((m) => m.provider === current.provider) ?? usable[0];
-      if (!replacement) {
-        return;
-      }
-      await this.request({
-        type: "set_model",
-        provider: replacement.provider,
-        modelId: replacement.id,
+      await this.queueModelOperation(async () => {
+        const current = await this.currentModel();
+        if (!current) {
+          return;
+        }
+        const verdict = results[modelKey(current.provider, current.id)];
+        if (!verdict || verdict.ok) {
+          return;
+        }
+        const usable = candidates.filter((m) => results[modelKey(m.provider, m.id)]?.ok);
+        const replacement =
+          usable.find((m) => m.provider === current.provider) ?? usable[0];
+        if (!replacement) {
+          return;
+        }
+        await this.request({
+          type: "set_model",
+          provider: replacement.provider,
+          modelId: replacement.id,
+        });
+        await this.pushState();
+        const message =
+          `${current.provider}/${current.id} did not answer` +
+          `${verdict.status ? ` (${verdict.status})` : ""} — switched to ${replacement.provider}/${replacement.id}.`;
+        this.output.appendLine(`[omp] ${message}`);
+        this.post({ t: "frame", frame: { type: "notice", level: "info", message } });
       });
-      await this.pushState();
-      const message =
-        `${current.provider}/${current.id} did not answer` +
-        `${verdict.status ? ` (${verdict.status})` : ""} — switched to ${replacement.provider}/${replacement.id}.`;
-      this.output.appendLine(`[omp] ${message}`);
-      this.post({ t: "frame", frame: { type: "notice", level: "info", message } });
     } catch (err) {
       this.output.appendLine(
         `[omp] could not switch off a dead model: ${err instanceof Error ? err.message : String(err)}`,
@@ -1538,7 +2166,7 @@ export class OmpSession implements vscode.Disposable {
    * sessions from other workspaces open too) and replay its transcript into the
    * webview.
    */
-  async openSession(sessionPath: string): Promise<void> {
+  async openSession(sessionPath: string, reportFailure = true): Promise<void> {
     try {
       await this.ensureStarted();
       if (!this.initialized) {
@@ -1564,8 +2192,257 @@ export class OmpSession implements vscode.Disposable {
       await this.pushState();
       this.output.appendLine(`[omp] switched to session ${sessionPath}`);
     } catch (err) {
+      if (!reportFailure) throw err;
       this.reportError("open session", err);
     }
+  }
+
+  /**
+   * Build a complete phone bootstrap from the already-running RPC process.
+   * No credentials or raw environment values are included.
+   */
+  async remoteFullSync(): Promise<JsonValue> {
+    await this.ensureStarted();
+    if (!this.initialized) await this.initDone;
+    const [state, modelsData, commandsData, transcriptData, stats] = await Promise.all([
+      this.request({ type: "get_state" }),
+      this.request({ type: "get_available_models" }),
+      this.request({ type: "get_available_commands" }),
+      this.request({ type: "get_messages" }),
+      this.request({ type: "get_session_stats" }).catch(() => null),
+    ]);
+    const cfg = vscode.workspace.getConfiguration("ompcode");
+    return toRemoteJson({
+      session: this.snapshot(),
+      state,
+      models: this.extractList(modelsData, "models"),
+      commands: this.extractList(commandsData, "commands"),
+      transcript: this.extractList(transcriptData, "messages"),
+      stats,
+      approvalMode: this.approvalSetting().mode,
+      profile: this.activeProfile ?? null,
+      configuration: {
+        defaultModel: cfg.get<string>("defaultModel", ""),
+        thinkingLevel: cfg.get<string>("thinkingLevel", "auto"),
+        theme: OmpSession.themeId(cfg.get<string>("theme", "violet")),
+      },
+      approvals: [...this.uiPendingFrames.values()],
+    });
+  }
+
+  /**
+   * The only network-to-agent dispatcher. Every branch constructs a fixed RPC
+   * frame locally; a remote object is never passed directly to stdin.
+   */
+  async handleRemoteCommand(command: RemoteCommand, attachments: readonly Attachment[] = []): Promise<JsonValue> {
+    if (command.sessionId !== this.sessionId) {
+      throw new Error("remote command targets a different session");
+    }
+    switch (command.command) {
+      case "session.sync":
+        return this.remoteFullSync();
+      case "transcript.get": {
+        await this.ensureStarted();
+        if (!this.initialized) await this.initDone;
+        const data = await this.request({ type: "get_messages" });
+        return toRemoteJson({ messages: this.extractList(data, "messages") });
+      }
+      case "prompt.send": {
+        const message = composePrompt(command.payload.text, [...attachments]);
+        if (!message) throw new Error("prompt is empty");
+        await this.promptOnce(message, command.payload.forModel, false);
+        return { delivered: true };
+      }
+      case "turn.abort":
+        this.proc?.send({ type: "abort" });
+        return { delivered: true };
+      case "approval.respond":
+        return this.handleRemoteApproval(command.payload.requestId, command.payload.response);
+      case "model.set":
+        await this.queueModelOperation(async () => {
+          await this.ensureStarted();
+          if (!this.initialized) await this.initDone;
+          await this.request({
+            type: "set_model",
+            provider: command.payload.provider,
+            modelId: command.payload.modelId,
+          });
+          await this.pushState();
+        });
+        return { changed: true };
+      case "models.probe":
+        await this.recheckModels();
+        return toRemoteJson({ results: this.probeResults() });
+      case "thinking.set":
+        await this.request({ type: "set_thinking_level", level: command.payload.level });
+        await this.pushState();
+        return { changed: true };
+      case "files.search": {
+        const base = command.payload.query.split("/").pop()?.replace(/[*?[\]{}\\]/g, "") ?? "";
+        if (!base) return { files: [] };
+        const pattern = new vscode.RelativePattern(this.workspaceCwd(), `**/*${base}*`);
+        const uris = await vscode.workspace.findFiles(
+          pattern,
+          "{**/node_modules/**,**/.git/**,**/dist/**}",
+          command.payload.maxResults,
+        );
+        const files: Array<{ path: string; name: string; relative: string }> = [];
+        for (const uri of uris) {
+          try {
+            const canonical = await requireCanonicalRemotePath(uri.fsPath, [this.workspaceCwd()]);
+            files.push({
+              path: canonical,
+              name: path.basename(canonical),
+              relative: path.relative(await fs.realpath(this.workspaceCwd()), canonical),
+            });
+          } catch {
+            // A glob result through a symlink outside the grant is invisible remotely.
+          }
+        }
+        return toRemoteJson({ files });
+      }
+      case "diff.get": {
+        const snap = this.diffSnaps.get(command.payload.changeId);
+        if (!snap?.afterHash) throw new Error("diff snapshot is unavailable");
+        const canonicalPath = await requireCanonicalRemotePath(snap.path, [this.workspaceCwd()]);
+        let current: string | null;
+        try {
+          current = await fs.readFile(canonicalPath, "utf8");
+        } catch (error) {
+          if (!isEnoent(error)) throw error;
+          current = null;
+        }
+        return toRemoteJson({
+          changeId: command.payload.changeId,
+          path: canonicalPath,
+          before: snap.before,
+          current,
+          afterSha256: snap.afterHash,
+        });
+      }
+      case "revert.apply": {
+        const snap = this.diffSnaps.get(command.payload.changeId);
+        if (!snap?.afterHash || snap.afterHash !== command.payload.expectedAfterSha256) {
+          throw new Error("diff snapshot hash does not match");
+        }
+        const canonicalPath = await requireCanonicalRemotePath(snap.path, [this.workspaceCwd()]);
+        if (!(await this.revertEdit(command.payload.changeId, canonicalPath))) {
+          throw new Error("revert is blocked by file drift or unsaved changes");
+        }
+        return { reverted: true };
+      }
+      case "editor.insert": {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.document.uri.scheme !== "file") throw new Error("no active file editor");
+        await requireCanonicalRemotePath(editor.document.uri.fsPath, [this.workspaceCwd()]);
+        const applied = await editor.edit((builder) => builder.insert(editor.selection.active, command.payload.text));
+        if (!applied) throw new Error("editor rejected the insert");
+        return { inserted: true };
+      }
+      case "transcript.export": {
+        const data = await this.request({ type: "get_messages" });
+        return { format: "markdown", content: formatTranscript(this.extractList(data, "messages")) };
+      }
+      case "session.rename":
+        this.sessionTitle = command.payload.title;
+        this.callbacks.onTitle?.(command.payload.title);
+        OmpSession.notifyBoard();
+        return { renamed: true };
+      case "session.reset":
+        await this.newSession();
+        return { reset: true };
+      case "session.compact":
+        await this.request({ type: "compact" });
+        return { compacted: true };
+      case "session.restart":
+        await this.restart();
+        return { restarted: true };
+      case "profile.update":
+        await this.updateUserProfileField(
+          command.payload.family,
+          command.payload.field,
+          command.payload.value,
+          true,
+        );
+        return { changed: true };
+      case "auth.login":
+        await this.loginProvider(command.payload.providerId, false);
+        return { authenticated: true };
+      // These are host-global or service-owned and must never fall through to RPC.
+      case "attachment.start":
+      case "attachment.commit":
+      case "attachment.cancel":
+      case "sessions.list":
+      case "session.create":
+      case "session.switch":
+      case "session.close":
+      case "history.list":
+      case "history.open":
+      case "approval-mode.set":
+      case "settings.update":
+      case "credentials.set":
+      case "credentials.clear":
+      case "diagnostics.get":
+      case "remote.stop":
+        throw new Error(`remote command ${command.command} is host-service owned`);
+    }
+  }
+
+  private handleRemoteApproval(
+    requestId: string,
+    response: ApprovalResponse,
+  ): JsonValue {
+    const pending = this.uiPendingFrames.get(requestId);
+    if (!pending || !this.uiPendingIds.has(requestId)) throw new ApprovalNotPendingError();
+    const method = pending.method;
+    const frame: Record<string, unknown> = { type: "extension_ui_response", id: requestId };
+    if (response.kind === "cancel") {
+      frame.cancelled = true;
+    } else if (method === "confirm" && response.kind === "confirm") {
+      frame.confirmed = response.value;
+    } else if (method === "select" && response.kind === "select") {
+      const options = Array.isArray(pending.options)
+        ? pending.options
+        : Array.isArray(pending.items)
+          ? pending.items
+          : [];
+      if (response.index < 0 || response.index >= options.length) {
+        throw new Error("approval selection is outside the option list");
+      }
+      const selected = options[response.index];
+      if (selected && typeof selected === "object") {
+        const item = selected as Record<string, unknown>;
+        frame.value = item.value ?? item.label ?? item.name ?? item.title ?? "";
+      } else {
+        frame.value = selected;
+      }
+    } else if (method === "input" && response.kind === "input") {
+      frame.value = response.value;
+    } else if (method === "editor" && response.kind === "editor") {
+      frame.value = response.value;
+    } else {
+      throw new Error("approval response kind does not match the pending request");
+    }
+    return this.deliverApprovalResponse(frame, "remote");
+  }
+
+  private deliverApprovalResponse(
+    frame: Record<string, unknown>,
+    winner: "desktop" | "remote",
+  ): JsonValue {
+    const requestId = typeof frame.id === "string" ? frame.id : "";
+    const proc = this.proc;
+    if (!requestId || !proc?.running) throw new Error("omp agent is not running");
+    if (!claimPendingApproval(requestId, this.uiPendingIds, this.uiPendingFrames)) {
+      throw new ApprovalNotPendingError();
+    }
+    // Claim-before-send is synchronous and shared by local and remote paths;
+    // exactly one responder can ever reach stdin.
+    proc.send(frame);
+    OmpSession.notifyBoard();
+    const outcome = frame.cancelled === true ? "cancelled" : "answered";
+    this.post({ t: "approvalResolved", requestId, outcome, winner });
+    return { delivered: true, outcome };
   }
 
   /**
@@ -1702,7 +2579,7 @@ export class OmpSession implements vscode.Disposable {
    * The RPC request deliberately has no timeout: a device-code flow stays
    * pending until the user authorizes it in the browser (Kimi allows 30 min).
    */
-  async loginProvider(providerId: string): Promise<void> {
+  async loginProvider(providerId: string, reportFailure = true): Promise<void> {
     if (!this.proc?.running) {
       await this.ensureStarted(true);
     }
@@ -1726,7 +2603,12 @@ export class OmpSession implements vscode.Disposable {
         ok: false,
         detail: err instanceof Error ? err.message : String(err),
       });
-      this.reportError(`login ${providerId}`, err);
+      if (reportFailure) {
+        this.reportError(`login ${providerId}`, err);
+      } else {
+        this.output.appendLine(`[omp] login "${providerId}" failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
     }
   }
 
@@ -1823,6 +2705,7 @@ export class OmpSession implements vscode.Disposable {
     family: string,
     field: EditableProfileField,
     value: string | null,
+    strict = false,
   ): Promise<void> {
     const cfg = vscode.workspace.getConfiguration("ompcode");
     const inspected = cfg.inspect<unknown[]>("modelProfiles");
@@ -1844,6 +2727,7 @@ export class OmpSession implements vscode.Disposable {
       this.output.appendLine(
         `[omp] cannot scope a profile row for "${family}" — edit ompcode.modelProfiles by hand`,
       );
+      if (strict) throw new Error(`profile family "${family}" cannot be safely scoped`);
       return;
     }
 
@@ -1978,6 +2862,12 @@ export class OmpSession implements vscode.Disposable {
     try {
       const stats = await this.request({ type: "get_session_stats" });
       this.post({ t: "sessionStats", stats });
+      const cost =
+        stats && typeof stats === "object" ? (stats as Record<string, unknown>).cost : undefined;
+      if (typeof cost === "number") {
+        this.lastCost = cost;
+        OmpSession.notifyBoard();
+      }
     } catch {
       // Command unknown or agent mid-restart — the chip simply stays stale.
     }
@@ -2008,6 +2898,7 @@ export class OmpSession implements vscode.Disposable {
 
   private post(msg: Record<string, unknown>): void {
     void this.webview?.postMessage(msg);
+    OmpSession.remoteMessageEmitter?.fire({ sessionId: this.sessionId, message: msg });
   }
 
   private reportError(context: string, err: unknown): void {
@@ -2115,6 +3006,7 @@ export class OmpSession implements vscode.Disposable {
         <button id="approval-chip" class="chip" aria-label="${esc(t("Tool access level"))}">${esc(t("access: ask"))}</button>
         <span id="file-chip" class="chip ghost hidden" aria-label="${esc(t("Active editor file"))}"></span>
         <span id="stats-chip" class="chip ghost hidden" aria-label="${esc(t("Session tokens and cost"))}"></span>
+        <button id="route-chip" class="chip hidden" title="${esc(t("Send the next prompt through a different model, once"))}" aria-label="${esc(t("Route next prompt"))}">${esc(t("route: …"))}</button>
         <span class="flex-spacer"></span>
         <button id="btn-send" class="send-btn" title="${esc(t("Send"))}" aria-label="${esc(t("Send"))}">↑</button>
         <button id="btn-stop" class="send-btn stop hidden" title="${esc(t("Stop"))}" aria-label="${esc(t("Stop"))}">■</button>

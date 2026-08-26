@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">УСТАНОВКА · ШАГИ 1–2</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">Поставьте агента, затем расширение</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="step-agent" data-pptx-bounds="64 182 1152 188">
+    <text x="64" y="240" font-size="56" font-weight="bold" fill="#6F5CE8">1</text>
+    <text x="140" y="208" font-size="26" font-weight="bold" fill="#2A2440">Поставьте CLI-агента</text>
+    <text x="140" y="240" font-size="20" fill="#1D1B26">Расширение — только GUI поверх него.</text>
+    <rect x="140" y="262" width="1076" height="48" fill="#F4F3FA"/>
+    <rect x="140" y="262" width="3" height="48" fill="#6F5CE8"/>
+    <text x="164" y="293" font-size="20" font-family="Consolas, Courier New, monospace" fill="#2A2440">bun install -g @oh-my-pi/pi-coding-agent</text>
+    <text x="140" y="336" font-size="15" fill="#6B667E">Нет bun — curl -fsSL https://bun.sh/install | bash, затем перезапустите терминал.</text>
+    <text x="140" y="358" font-size="15" fill="#6B667E">Расширение ищет omp в PATH; свой путь задаётся настройкой ompcode.ompPath.</text>
+  </g>
+
+  <g id="step-extension" data-pptx-bounds="64 382 1152 182">
+    <line x1="64" y1="386" x2="1216" y2="386" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="458" font-size="56" font-weight="bold" fill="#6F5CE8">2</text>
+    <text x="140" y="426" font-size="26" font-weight="bold" fill="#2A2440">Поставьте расширение</text>
+    <text x="140" y="458" font-size="20" fill="#1D1B26">Скачайте .vsix из Releases и перетащите в панель Extensions — или:</text>
+    <rect x="140" y="480" width="1076" height="48" fill="#F4F3FA"/>
+    <rect x="140" y="480" width="3" height="48" fill="#6F5CE8"/>
+    <text x="164" y="511" font-size="20" font-family="Consolas, Courier New, monospace" fill="#2A2440">code --install-extension omp-code-&lt;версия&gt;.vsix</text>
+    <text x="140" y="554" font-size="15" fill="#6B667E">После установки перезагрузите окно: Reload Window.</text>
+  </g>
+
+  <g id="upgrade-warning" data-pptx-bounds="64 574 1152 94">
+    <rect x="64" y="578" width="1152" height="86" fill="#F4F3FA"/>
+    <rect x="64" y="578" width="3" height="86" fill="#6F5CE8"/>
+    <use data-icon="tabler-outline/alert-triangle" x="92" y="600" width="24" height="24" fill="#6F5CE8" stroke-width="2"/>
+    <text x="132" y="606" font-size="15" fill="#1D1B26"><tspan x="132" dy="0">Обновляетесь со сборки старше 0.5.0? Идентификатор расширения сменился, поэтому новая версия встанет рядом со старой:</tspan><tspan x="132" dy="22">две одинаковые иконки в заголовке редактора и задвоенные команды в палитре.</tspan><tspan x="132" dy="22">Уберите старую — code --uninstall-extension local.omp-code — и перезагрузите окно.</tspan></text>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Установка</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">03</text>
+  </g>
+</svg>

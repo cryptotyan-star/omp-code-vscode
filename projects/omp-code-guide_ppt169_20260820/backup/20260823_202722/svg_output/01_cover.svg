@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="cover" font-family="Golos Text, Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="cover-identity" data-pptx-bounds="64 168 1152 288">
+    <text x="64" y="196" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">КРАТКАЯ ИНСТРУКЦИЯ</text>
+    <text x="64" y="300" font-size="88" font-weight="bold" fill="#2A2440">OMP Code</text>
+    <line x1="64" y1="340" x2="1216" y2="340" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="392" font-size="26" fill="#1D1B26"><tspan x="64" dy="0">Кодинг-агент в стиле Claude Code внутри VS Code —</tspan><tspan x="64" dy="38">на той модели, за которую вы уже платите.</tspan></text>
+  </g>
+
+  <g id="cover-route" data-pptx-bounds="64 508 1152 96">
+    <line x1="64" y1="524" x2="1216" y2="524" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="578" font-size="26" font-weight="bold" fill="#6F5CE8">01</text>
+    <text x="112" y="578" font-size="26" fill="#2A2440">Установка</text>
+    <line x1="424" y1="548" x2="424" y2="590" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="464" y="578" font-size="26" font-weight="bold" fill="#6F5CE8">02</text>
+    <text x="512" y="578" font-size="26" fill="#2A2440">Первый запуск</text>
+    <line x1="824" y1="548" x2="824" y2="590" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="864" y="578" font-size="26" font-weight="bold" fill="#6F5CE8">03</text>
+    <text x="912" y="578" font-size="26" fill="#2A2440">Что умеет</text>
+  </g>
+
+  <g id="cover-footer" data-pptx-bounds="64 664 1152 36">
+    <use data-icon="simple-icons/github" x="64" y="674" width="17" height="17" fill="#6B667E" stroke-width="2"/>
+    <text x="92" y="688" font-size="15" fill="#6B667E">github.com/cryptotyan-star/omp-code-vscode</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">Лицензия MIT</text>
+  </g>
+</svg>

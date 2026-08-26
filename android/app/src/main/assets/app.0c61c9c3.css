@@ -1,0 +1,24 @@
+:root {
+  color-scheme: light dark;
+  --bg: #111218;
+  --surface: #1b1c24;
+  --surface2: #252630;
+  --text: #f2f0fa;
+  --muted: #aaa7b6;
+  --accent: #a999ff;
+  --danger: #ffb4ab;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 15px/1.48 system-ui, sans-serif; }
+body { padding: 12px 12px max(12px, env(safe-area-inset-bottom)); }
+#app { max-width: 860px; margin: 0 auto; }
+.empty { min-height: 55vh; display: grid; place-content: center; text-align: center; color: var(--muted); }
+.message { margin: 10px 0; padding: 12px 14px; border-radius: 14px; background: var(--surface); overflow-wrap: anywhere; }
+.message.user { background: #302b54; margin-left: 10%; }
+.role { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.content { white-space: pre-wrap; }
+.content a { color: var(--accent); }
+.content code { background: var(--surface2); border-radius: 4px; padding: 1px 4px; }
+.tool { border-left: 3px solid var(--accent); }
+.approval { border: 1px solid var(--danger); }
+button { color: var(--text); background: var(--surface2); border: 1px solid #4b4c59; border-radius: 10px; padding: 10px 12px; }

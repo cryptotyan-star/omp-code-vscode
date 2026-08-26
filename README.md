@@ -55,6 +55,10 @@ is your choice: Claude, GLM, Qwen, Kimi, or any OpenAI-compatible endpoint you p
 | **Tool access on a leash** | Three tiers, from "ask before every change" to unattended. Per-tool rules if you want them. |
 | **Model-family profiles** | A model behaves the way its own harness makes it behave — instruction file, reasoning level, approval tier. |
 | **Sessions that survive** | Full history across workspaces, searchable, resumable. A crash reattaches instead of losing the chat. |
+| **Cheap model, one prompt at a time** | Route the next prompt through any model in one click; the session snaps back afterwards. |
+| **Undo an edit** | Every file the agent touches grows a `revert` button — one click restores the before-snapshot. |
+| **All sessions, one board** | A sidebar list of every running chat: model, state, cost, with stop and close per row. |
+| **Android Remote Control** | Continue an active desktop session from the companion phone app, with end-to-end encryption and explicit desktop grants. |
 | **English and Russian** | Independent of the VS Code display language. |
 
 ---
@@ -165,8 +169,10 @@ one of them fails.
 
 Streaming markdown with syntax highlighting, collapsible reasoning blocks, and a card per
 tool call showing arguments, status and output. After an edit, the card grows a **diff**
-button (before ↔ current) and any new language-server diagnostics surface as a warning —
-so you see what the agent broke without leaving the panel.
+button (before ↔ current) and a **revert** button — one click restores the file to its
+pre-edit snapshot (a file the agent created is deleted again). Any new language-server
+diagnostics surface as a warning, so you see what the agent broke without leaving the
+panel.
 
 Type `/` for the agent's slash commands, `@` to autocomplete a workspace file into the
 prompt. Attach files with 📎, `Ctrl/Cmd+V`, or `Shift`-drag. `Cmd/Ctrl+Alt+L` sends the
@@ -194,6 +200,16 @@ Anything that asks opens a dialog in the panel with the tool name and its argume
 > (`tools.approval` in a profile overlay) are enforced even under `yolo`, which is the
 > reliable way to keep one tool locked.
 
+### Route one prompt
+
+The model menu has a **routing** entry: arm it and the composer shows a `route:` chip.
+Pick any model there and only the *next* prompt goes through it — then the session snaps
+back to the model it had. That is the "cheap model for the routine, expensive one for the
+hard part" workflow without switching the whole conversation back and forth.
+
+The switch never happens silently: if the routed model cannot be selected, the prompt is
+not sent at all, and an interrupted turn restores the original model on the next one.
+
 ### Session history
 
 Every session across every workspace, with a filter over title, preview, folder and model.
@@ -202,6 +218,33 @@ Picking one reattaches the agent to it and replays the transcript.
 <p align="center"><img src="docs/images/history.png" alt="Session history with model badges and relative times" width="520"></p>
 
 `Export transcript as Markdown` writes the whole conversation to a file.
+
+### The session board
+
+The **Sessions** view in the OMP Code sidebar lists every running chat — the sidebar one
+plus every editor tab — with its model, its state (working, waiting for an approval,
+idle), and the session cost. Clicking a row brings that chat to the front; a running row
+gets an inline stop button, tabs get a close button.
+
+### Android Remote Control
+
+Run **OMP Code: Start Android Remote Control**, choose the exact grant, then scan the
+short-lived QR in the companion Android app. The phone reconnects to the same live
+`omp` process while this computer and VS Code remain running; closing an editor tab does
+not kill a session currently retained by Remote Control.
+
+The desktop makes one outbound `wss://` connection. Session traffic is end-to-end
+encrypted, the relay sees only opaque frames, credentials live in VS Code Secret
+Storage, and network input goes through a closed command dispatcher — it is never
+forwarded as raw RPC/stdin. The default grant covers only the current session; broader
+session/settings and credential grants require explicit desktop selection. Use
+**OMP Code: Stop and Revoke Remote Control** to rotate away the enrolled phone.
+
+Phone uploads are encrypted in transit. After verification, a committed upload is
+temporarily staged as a plaintext file in VS Code's extension global storage so the
+local agent can read it; it is removed after the matching `agent_end`, explicit cancel,
+or stale crash cleanup. Configure a self-hosted origin with `ompcode.remoteRelayUrl`;
+plaintext `ws://` is accepted only on loopback.
 
 ### Everything else on the ⚙ menu
 

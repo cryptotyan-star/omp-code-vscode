@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="ending" font-family="Golos Text, Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">СПРАВОЧНИК · ДИАГНОСТИКА</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">Если что-то не работает</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="diagnostics-command" data-pptx-bounds="64 176 636 56">
+    <rect x="64" y="180" width="636" height="48" fill="#F4F3FA"/>
+    <rect x="64" y="180" width="3" height="48" fill="#6F5CE8"/>
+    <use data-icon="tabler-outline/stethoscope" x="88" y="192" width="24" height="24" fill="#6F5CE8" stroke-width="2"/>
+    <text x="124" y="211" font-size="20" font-family="Consolas, Courier New, monospace" fill="#2A2440">OMP Code: Run Diagnostics</text>
+  </g>
+
+  <g id="diagnostics-report" data-pptx-bounds="64 238 636 72">
+    <text x="64" y="254" font-size="15" fill="#6B667E"><tspan x="64" dy="0">Отчёт показывает путь к бинарнику, вывод omp --version, проходит ли</tspan><tspan x="64" dy="22">хендшейк, у каких провайдеров есть учётные данные, какие модели</tspan><tspan x="64" dy="22">предлагает агент. Значений ключей в нём нет — можно приложить к issue.</tspan></text>
+  </g>
+
+  <g id="symptom-binary" data-pptx-bounds="64 322 636 104">
+    <line x1="64" y1="326" x2="700" y2="326" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="364" font-size="20" font-weight="bold" fill="#2A2440">Cannot find the omp binary</text>
+    <text x="64" y="390" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">CLI не установлен или не в том PATH, который видит VS Code.</tspan><tspan x="64" dy="22">Укажите полный путь в ompcode.ompPath.</tspan></text>
+  </g>
+
+  <g id="symptom-401" data-pptx-bounds="64 434 636 96">
+    <line x1="64" y1="438" x2="700" y2="438" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="472" font-size="20" font-weight="bold" fill="#2A2440">Везде 401</text>
+    <text x="64" y="498" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">Протухший ключ. Удалите его командой OMP Code: Clear Stored</tspan><tspan x="64" dy="22">API Key — входы по подписке это не затронет.</tspan></text>
+  </g>
+
+  <g id="symptom-short-list" data-pptx-bounds="64 538 636 96">
+    <line x1="64" y1="542" x2="700" y2="542" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="576" font-size="20" font-weight="bold" fill="#2A2440">Список моделей короткий</text>
+    <text x="64" y="602" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">Проверка скрыла нерабочие. Пункт Show all models в выборе</tspan><tspan x="64" dy="22">модели их покажет, Re-check subscriptions перезапустит проверку.</tspan></text>
+  </g>
+
+  <g id="shortcuts-table" data-pptx-replace-with="table" data-pptx-bounds="744 172 472 190">
+    <metadata type="application/json">
+{"x":744,"y":176,"width":472,"height":182,"name":"shortcuts-table","header_rows":1,
+"column_widths":[2.4,3.6],
+"style":{"font_family":"Golos Text","font_size":15,"band_row":false,"border_color":"#DDD8EE","border_width":1},
+"columns":[{"text":"Клавиши","bold":true},{"text":"Действие","bold":true}],
+"rows":[
+[{"text":"Cmd/Ctrl+Alt+O","font_family":"Consolas"},{"text":"Открыть чат вкладкой редактора"}],
+[{"text":"Cmd/Ctrl+Alt+N","font_family":"Consolas"},{"text":"Новая вкладка чата"}],
+[{"text":"Cmd/Ctrl+Alt+L","font_family":"Consolas"},{"text":"Отправить выделение в чат"}],
+[{"text":"Shift+Enter","font_family":"Consolas"},{"text":"Перенос строки в композере"}],
+[{"text":"Esc","font_family":"Consolas"},{"text":"Прервать текущий ход"}],
+[{"text":"Стрелка вверх","font_family":"Consolas"},{"text":"Предыдущий промпт"}]]}
+    </metadata>
+    <line x1="744" y1="176" x2="1216" y2="176" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="194" font-size="15" font-weight="bold" fill="#2A2440">Клавиши</text>
+    <text x="933" y="194" font-size="15" font-weight="bold" fill="#2A2440">Действие</text>
+    <line x1="744" y1="202" x2="1216" y2="202" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="220" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">Cmd/Ctrl+Alt+O</text>
+    <text x="933" y="220" font-size="15" fill="#1D1B26">Открыть чат вкладкой редактора</text>
+    <line x1="744" y1="228" x2="1216" y2="228" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="246" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">Cmd/Ctrl+Alt+N</text>
+    <text x="933" y="246" font-size="15" fill="#1D1B26">Новая вкладка чата</text>
+    <line x1="744" y1="254" x2="1216" y2="254" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="272" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">Cmd/Ctrl+Alt+L</text>
+    <text x="933" y="272" font-size="15" fill="#1D1B26">Отправить выделение в чат</text>
+    <line x1="744" y1="280" x2="1216" y2="280" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="298" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">Shift+Enter</text>
+    <text x="933" y="298" font-size="15" fill="#1D1B26">Перенос строки в композере</text>
+    <line x1="744" y1="306" x2="1216" y2="306" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="324" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">Esc</text>
+    <text x="933" y="324" font-size="15" fill="#1D1B26">Прервать текущий ход</text>
+    <line x1="744" y1="332" x2="1216" y2="332" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="350" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">Стрелка вверх</text>
+    <text x="933" y="350" font-size="15" fill="#1D1B26">Предыдущий промпт</text>
+    <line x1="744" y1="358" x2="1216" y2="358" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="commands-note" data-pptx-bounds="744 370 472 60">
+    <use data-icon="tabler-outline/keyboard" x="744" y="376" width="20" height="20" fill="#6B667E" stroke-width="2"/>
+    <text x="776" y="392" font-size="15" fill="#6B667E"><tspan x="776" dy="0">Все шестнадцать команд — в палитре</tspan><tspan x="776" dy="22">под префиксом OMP Code:</tspan></text>
+  </g>
+
+  <g id="platforms" data-pptx-bounds="744 432 472 148">
+    <line x1="744" y1="436" x2="1216" y2="436" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="744" y="474" font-size="20" font-weight="bold" fill="#2A2440">Платформы</text>
+    <text x="744" y="502" font-size="15" fill="#1D1B26"><tspan x="744" dy="0">Чистый JavaScript: .vsix ставится на macOS,</tspan><tspan x="744" dy="22">Linux и Windows. Нативная часть только у omp:</tspan><tspan x="744" dy="22">darwin-arm64/x64, linux-x64/arm64, win32-x64.</tspan><tspan x="744" dy="22">Windows на ARM не поддерживается.</tspan></text>
+  </g>
+
+  <g id="language-note" data-pptx-bounds="744 588 472 60">
+    <text x="744" y="606" font-size="15" fill="#6B667E"><tspan x="744" dy="0">ompcode.language не зависит от языка</tspan><tspan x="744" dy="22">интерфейса VS Code — Language Pack не нужен.</tspan></text>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Полная документация, оставшиеся настройки и кастомные провайдеры — github.com/cryptotyan-star/omp-code-vscode</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">10</text>
+  </g>
+</svg>

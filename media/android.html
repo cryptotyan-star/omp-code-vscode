@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OMP Code Remote</title>
+  <link rel="stylesheet" href="main.css">
+</head>
+<body data-theme="violet" data-platform="android">
+<div id="app">
+  <header class="topbar">
+    <span class="mobile-nav-slot mobile-only" aria-hidden="true"></span>
+    <div class="topbar-copy">
+      <div class="topbar-title"><span class="spark">✳</span><span id="session-title">OMP Code</span></div>
+      <div id="connection-state" class="connection-state" data-state="connecting" role="status" aria-live="polite">Connecting securely…</div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-history" class="icon-btn" title="Session history" aria-label="Session history"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><polyline points="8 4.75 8 8 10.25 9.5"/></svg></button>
+      <button id="btn-new" class="icon-btn" title="New chat tab" aria-label="New chat tab">＋</button>
+      <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+    </div>
+  </header>
+  <main id="messages">
+    <div class="welcome">
+      <div class="welcome-spark">✳</div>
+      <h1>What can I help you build?</h1>
+      <p class="welcome-sub">Continue the same OMP Code session running on your computer. Type <code>/</code> for commands or attach a file with 📎.</p>
+    </div>
+    <div id="working" class="status-line hidden" role="status" aria-live="polite"><span class="spark spin">✳</span> <span id="working-text">Working…</span> <span class="dim">esc to interrupt</span></div>
+  </main>
+  <div id="modal-holder"></div>
+  <footer class="composer">
+    <div class="composer-box">
+      <div id="slash-popup" class="slash-popup hidden"></div>
+      <div id="at-popup" class="slash-popup hidden"></div>
+      <div id="attachments" class="attachments" aria-label="Attached files"></div>
+      <textarea id="input" rows="1" placeholder="Ask OMP Code…" aria-label="Prompt"></textarea>
+      <div class="composer-row">
+        <button id="btn-attach" class="chip attach" title="Attach files" aria-label="Attach files">📎</button>
+        <button id="model-chip" class="chip" aria-label="Select model">model</button>
+        <button id="profile-chip" class="chip hidden" aria-label="Model profile"></button>
+        <button id="thinking-chip" class="chip" aria-label="Thinking level">think: auto</button>
+        <button id="approval-chip" class="chip" aria-label="Tool access level">access: ask</button>
+        <span id="file-chip" class="chip ghost hidden" aria-label="Active editor file"></span>
+        <span id="stats-chip" class="chip ghost hidden" aria-label="Session tokens and cost"></span>
+        <button id="route-chip" class="chip hidden" title="Route next prompt once" aria-label="Route next prompt">route: …</button>
+        <span class="flex-spacer"></span>
+        <button id="btn-send" class="send-btn" title="Send" aria-label="Send">↑</button>
+        <button id="btn-stop" class="send-btn stop hidden" title="Stop" aria-label="Stop">■</button>
+      </div>
+    </div>
+    <div id="proc-banner" class="proc-banner hidden"><span id="proc-text">Computer session is offline.</span> <button id="btn-restart">Restart</button></div>
+  </footer>
+  <div id="menu-holder"></div>
+  <div id="toast-holder"></div>
+  <div id="drop-overlay" class="hidden"><div><span class="drop-title">Drop files to attach</span>Release to add them to the prompt.</div></div>
+</div>
+<script type="module" src="main.mjs"></script>
+</body>
+</html>

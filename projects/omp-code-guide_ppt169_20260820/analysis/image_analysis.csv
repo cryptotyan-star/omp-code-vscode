@@ -1,0 +1,11 @@
+No,Filename,Width,Height,AspectRatio,PixelAspectRatio,SourceDisplayRatio,RatioSource,Format,HasTransparentPixels,UsageCount,DisplayRatioVariants,AssetKind,SvgRenderable,PptxNativeSupported,SizeKB,Category
+1,approval.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,67.5,Portrait
+2,chat.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,58.0,Portrait
+3,context-warning.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,35.8,Portrait
+4,history.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,78.9,Portrait
+5,keys.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,58.3,Portrait
+6,models.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,73.0,Portrait
+7,profile-thinking.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,77.4,Portrait
+8,profile.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,82.5,Portrait
+9,settings-menu.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,69.3,Portrait
+10,tool-access.png,560,880,0.64,0.64,,native,PNG,False,1,,bitmap,True,True,52.5,Portrait

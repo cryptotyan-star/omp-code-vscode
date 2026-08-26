@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Golos Text, Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">СПРАВОЧНИК · УПРАВЛЕНИЕ</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">История, меню шестерёнки и настройки</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="block-history" data-pptx-bounds="64 183 636 102">
+    <text x="64" y="204" font-size="20" font-weight="bold" fill="#2A2440">История</text>
+    <text x="64" y="232" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">Все сессии по всем рабочим папкам, с фильтром по названию, превью,</tspan><tspan x="64" dy="22">папке и модели. Выбор переподключает агента и проигрывает транскрипт.</tspan><tspan x="64" dy="22">Export transcript as Markdown выгружает весь диалог в файл.</tspan></text>
+  </g>
+
+  <g id="block-gear" data-pptx-bounds="64 301 636 82">
+    <text x="64" y="318" font-size="20" font-weight="bold" fill="#2A2440">Меню шестерёнки</text>
+    <text x="64" y="346" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">Новая вкладка, очистка сессии, экспорт, вход, ключи, перепроверка</tspan><tspan x="64" dy="22">моделей, диагностика, сжатие контекста, перезапуск агента.</tspan></text>
+  </g>
+
+  <g id="stage-management" data-pptx-bounds="744 172 472 268">
+    <rect x="744" y="176" width="472" height="272" fill="#16141F"/>
+    <image href="../images/history.png" x="838" y="200" width="130" height="204" preserveAspectRatio="xMidYMid meet"/>
+    <image href="../images/settings-menu.png" x="992" y="200" width="130" height="204" preserveAspectRatio="xMidYMid meet"/>
+    <text x="903" y="430" font-size="15" fill="#6B667E" text-anchor="middle">История сессий</text>
+    <text x="1057" y="430" font-size="15" fill="#6B667E" text-anchor="middle">Меню настроек</text>
+  </g>
+
+  <g id="settings-table" data-pptx-replace-with="table" data-pptx-bounds="64 452 1152 215">
+    <metadata type="application/json">
+{"x":64,"y":456,"width":1152,"height":207,"name":"settings-table","header_rows":1,
+"column_widths":[3,1.6,5.4],
+"style":{"font_family":"Golos Text","font_size":15,"band_row":false,"border_color":"#DDD8EE","border_width":1},
+"columns":[{"text":"Настройка","bold":true},{"text":"По умолчанию","bold":true},{"text":"Что делает","bold":true}],
+"rows":[
+[{"text":"ompcode.ompPath","font_family":"Consolas"},{"text":"omp","font_family":"Consolas"},{"text":"Путь к бинарнику агента"}],
+[{"text":"ompcode.language","font_family":"Consolas"},{"text":"auto","font_family":"Consolas"},{"text":"Язык чата: auto, en, ru"}],
+[{"text":"ompcode.defaultModel","font_family":"Consolas"},{"text":"пусто"},{"text":"provider/modelId при старте, нестрогое совпадение"}],
+[{"text":"ompcode.verifyModels","font_family":"Consolas"},{"text":"true","font_family":"Consolas"},{"text":"Проверять каждую модель и скрывать нерабочие"}],
+[{"text":"ompcode.thinkingLevel","font_family":"Consolas"},{"text":"auto","font_family":"Consolas"},{"text":"От off до max либо auto"}],
+[{"text":"ompcode.approvalMode","font_family":"Consolas"},{"text":"always-ask","font_family":"Consolas"},{"text":"always-ask, write, yolo"}],
+[{"text":"ompcode.modelProfiles","font_family":"Consolas"},{"text":"[]","font_family":"Consolas"},{"text":"Профили под семейства поверх встроенных"}],
+[{"text":"ompcode.customProviders","font_family":"Consolas"},{"text":"{}","font_family":"Consolas"},{"text":"Дополнительные провайдеры для models.yml"}]]}
+    </metadata>
+    <line x1="64" y1="456" x2="1216" y2="456" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="472" font-size="15" font-weight="bold" fill="#2A2440">Настройка</text>
+    <text x="410" y="472" font-size="15" font-weight="bold" fill="#2A2440">По умолчанию</text>
+    <text x="594" y="472" font-size="15" font-weight="bold" fill="#2A2440">Что делает</text>
+    <line x1="64" y1="479" x2="1216" y2="479" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="495" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.ompPath</text>
+    <text x="410" y="495" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">omp</text>
+    <text x="594" y="495" font-size="15" fill="#1D1B26">Путь к бинарнику агента</text>
+    <line x1="64" y1="502" x2="1216" y2="502" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="518" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.language</text>
+    <text x="410" y="518" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">auto</text>
+    <text x="594" y="518" font-size="15" fill="#1D1B26">Язык чата: auto, en, ru</text>
+    <line x1="64" y1="525" x2="1216" y2="525" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="541" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.defaultModel</text>
+    <text x="410" y="541" font-size="15" fill="#1D1B26">пусто</text>
+    <text x="594" y="541" font-size="15" fill="#1D1B26">provider/modelId при старте, нестрогое совпадение</text>
+    <line x1="64" y1="548" x2="1216" y2="548" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="564" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.verifyModels</text>
+    <text x="410" y="564" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">true</text>
+    <text x="594" y="564" font-size="15" fill="#1D1B26">Проверять каждую модель и скрывать нерабочие</text>
+    <line x1="64" y1="571" x2="1216" y2="571" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="587" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.thinkingLevel</text>
+    <text x="410" y="587" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">auto</text>
+    <text x="594" y="587" font-size="15" fill="#1D1B26">От off до max либо auto</text>
+    <line x1="64" y1="594" x2="1216" y2="594" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="610" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.approvalMode</text>
+    <text x="410" y="610" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">always-ask</text>
+    <text x="594" y="610" font-size="15" fill="#1D1B26">always-ask, write, yolo</text>
+    <line x1="64" y1="617" x2="1216" y2="617" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="633" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.modelProfiles</text>
+    <text x="410" y="633" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">[]</text>
+    <text x="594" y="633" font-size="15" fill="#1D1B26">Профили под семейства поверх встроенных</text>
+    <line x1="64" y1="640" x2="1216" y2="640" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="656" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">ompcode.customProviders</text>
+    <text x="410" y="656" font-size="15" font-family="Consolas, Courier New, monospace" fill="#1D1B26">{}</text>
+    <text x="594" y="656" font-size="15" fill="#1D1B26">Дополнительные провайдеры для models.yml</text>
+    <line x1="64" y1="663" x2="1216" y2="663" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Справочник</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">09</text>
+  </g>
+</svg>

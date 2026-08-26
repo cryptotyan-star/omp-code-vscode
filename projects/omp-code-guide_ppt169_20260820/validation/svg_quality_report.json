@@ -1,0 +1,738 @@
+{
+  "schema": "ppt-master.svg-quality-report.v1",
+  "stage": "final",
+  "target": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "digest": "6bbff932a101ea17acfef88af913514257e42d351ee19fd37ad84c6d02c9f5aa",
+    "file_count": 10,
+    "files": [
+      {
+        "file": "01_cover.svg",
+        "sha256": "c65c995b5ae11dda0b57071d4c7841edb46f935872895b95b03f5a97e2905b3e"
+      },
+      {
+        "file": "02_what_it_is.svg",
+        "sha256": "3077b94c597c71ea34d6102a2a54f223715600c698a5f0ed4aada1df60f80197"
+      },
+      {
+        "file": "03_install_steps.svg",
+        "sha256": "f79e7a1a1b10d92fe0d4a8564ee150425c51a3369bd325ba1f1d932ea4673fb2"
+      },
+      {
+        "file": "04_sign_in.svg",
+        "sha256": "cb969511b0079d13fd283d54e821616318508a489f8a474fe036a10661b9c73c"
+      },
+      {
+        "file": "05_first_run.svg",
+        "sha256": "30c571b625d5319474bf0d0de2dfedcc67295b18f0b61266744138234c9f31bc"
+      },
+      {
+        "file": "06_models_and_cost.svg",
+        "sha256": "6185d6c54feca0ce6cca41b7c80f978941da2567d9017bffe392676bd51457db"
+      },
+      {
+        "file": "07_tool_access.svg",
+        "sha256": "e32ca8c64fabadba42f5d3db9411014b1dffc6aa4ec575f21fdefefd1d78b469"
+      },
+      {
+        "file": "08_model_profiles.svg",
+        "sha256": "da3176f15a799c79886753899a402a77a7c3b43aec99b8ea05f69b0090c0a4f0"
+      },
+      {
+        "file": "09_history_and_settings.svg",
+        "sha256": "8814f282605e36ea235f07343035423edddcee60073f7a5ea32ea4387957c1e6"
+      },
+      {
+        "file": "10_troubleshooting.svg",
+        "sha256": "2bf0a004b44edfec9e335d27f591b4680a0bf7238025b50f951cdfd0b4b0e308"
+      }
+    ]
+  },
+  "summary": {
+    "total": 10,
+    "passed": 0,
+    "warnings": 10,
+    "errors": 0
+  },
+  "issue_types": {},
+  "categories": {
+    "blocking": {
+      "count": 0,
+      "issues": []
+    },
+    "introduced": {
+      "count": 10,
+      "issues": [
+        {
+          "file": "01_cover.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "02_what_it_is.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "03_install_steps.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "04_sign_in.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "05_first_run.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "06_models_and_cost.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "07_tool_access.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "08_model_profiles.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "09_history_and_settings.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        },
+        {
+          "file": "10_troubleshooting.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+        }
+      ]
+    },
+    "inherited": {
+      "count": 0,
+      "issues": []
+    },
+    "source-import": {
+      "count": 0,
+      "summary": {
+        "warning_count": 0,
+        "by_code": {}
+      }
+    }
+  },
+  "drift": {
+    "colors": {},
+    "fonts": {},
+    "sizes": {}
+  },
+  "carrier_receipt": {
+    "scope": "informational-not-a-quota",
+    "pages": 10,
+    "totals": {
+      "text_elements": 199,
+      "image_placements": 10,
+      "icons": 9,
+      "svg_geometry_elements": 98,
+      "preset_shapes": 0,
+      "page_frame_elements": 10,
+      "marker_uses": 1
+    },
+    "pages_with": {
+      "images": 6,
+      "icons": 7,
+      "presets": 0,
+      "charts": 0,
+      "tables": 3,
+      "formulas": 0
+    },
+    "geometry_elements": {
+      "circle": 8,
+      "ellipse": 0,
+      "line": 52,
+      "path": 0,
+      "polygon": 0,
+      "polyline": 0,
+      "rect": 38
+    },
+    "preset_names": {},
+    "native_objects": {
+      "chart": 0,
+      "formula_block": 0,
+      "formula_inline": 0,
+      "other": 0,
+      "table": 3
+    },
+    "image_page_max_frame_share_range": [
+      0.0288,
+      0.1083
+    ]
+  },
+  "project_issues": {
+    "template": [],
+    "animation": [],
+    "illustration": [],
+    "communication_trace": [],
+    "pptx_structure": []
+  },
+  "files": [
+    {
+      "file": "01_cover.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/01_cover.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 11,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 1,
+          "geometry": {
+            "svg_elements": {
+              "rect": 1,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 4,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 11,
+        "tspan_elements": 2
+      },
+      "passed": true,
+      "source_sha256": "c65c995b5ae11dda0b57071d4c7841edb46f935872895b95b03f5a97e2905b3e"
+    },
+    {
+      "file": "02_what_it_is.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/02_what_it_is.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 17,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 1,
+          "geometry": {
+            "svg_elements": {
+              "rect": 9,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 2,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 1
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 17,
+        "tspan_elements": 2
+      },
+      "passed": true,
+      "source_sha256": "3077b94c597c71ea34d6102a2a54f223715600c698a5f0ed4aada1df60f80197"
+    },
+    {
+      "file": "03_install_steps.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/03_install_steps.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 16,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 1,
+          "geometry": {
+            "svg_elements": {
+              "rect": 7,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 2,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Consolas, Courier New, monospace",
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 16,
+        "tspan_elements": 3
+      },
+      "passed": true,
+      "source_sha256": "f79e7a1a1b10d92fe0d4a8564ee150425c51a3369bd325ba1f1d932ea4673fb2"
+    },
+    {
+      "file": "04_sign_in.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/04_sign_in.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 14,
+          "images": {
+            "placements": 1,
+            "files": [
+              "keys.png"
+            ],
+            "max_frame_share": 0.1083
+          },
+          "icons": 2,
+          "geometry": {
+            "svg_elements": {
+              "rect": 2,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 2,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Consolas, Courier New, monospace",
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 14,
+        "tspan_elements": 10
+      },
+      "passed": true,
+      "source_sha256": "cb969511b0079d13fd283d54e821616318508a489f8a474fe036a10661b9c73c"
+    },
+    {
+      "file": "05_first_run.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/05_first_run.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 19,
+          "images": {
+            "placements": 1,
+            "files": [
+              "chat.png"
+            ],
+            "max_frame_share": 0.1083
+          },
+          "icons": 0,
+          "geometry": {
+            "svg_elements": {
+              "rect": 4,
+              "circle": 8,
+              "ellipse": 0,
+              "line": 6,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 19,
+        "tspan_elements": 4
+      },
+      "passed": true,
+      "source_sha256": "30c571b625d5319474bf0d0de2dfedcc67295b18f0b61266744138234c9f31bc"
+    },
+    {
+      "file": "06_models_and_cost.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/06_models_and_cost.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 17,
+          "images": {
+            "placements": 2,
+            "files": [
+              "context-warning.png",
+              "models.png"
+            ],
+            "max_frame_share": 0.104
+          },
+          "icons": 0,
+          "geometry": {
+            "svg_elements": {
+              "rect": 2,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 5,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 17,
+        "tspan_elements": 10
+      },
+      "passed": true,
+      "source_sha256": "6185d6c54feca0ce6cca41b7c80f978941da2567d9017bffe392676bd51457db"
+    },
+    {
+      "file": "07_tool_access.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/07_tool_access.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 26,
+          "images": {
+            "placements": 2,
+            "files": [
+              "approval.png",
+              "tool-access.png"
+            ],
+            "max_frame_share": 0.0681
+          },
+          "icons": 1,
+          "geometry": {
+            "svg_elements": {
+              "rect": 4,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 6,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 1,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Consolas, Courier New, monospace",
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 26,
+        "tspan_elements": 9
+      },
+      "passed": true,
+      "source_sha256": "e32ca8c64fabadba42f5d3db9411014b1dffc6aa4ec575f21fdefefd1d78b469"
+    },
+    {
+      "file": "08_model_profiles.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/08_model_profiles.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 12,
+          "images": {
+            "placements": 2,
+            "files": [
+              "profile-thinking.png",
+              "profile.png"
+            ],
+            "max_frame_share": 0.0681
+          },
+          "icons": 1,
+          "geometry": {
+            "svg_elements": {
+              "rect": 4,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 12,
+        "tspan_elements": 15
+      },
+      "passed": true,
+      "source_sha256": "da3176f15a799c79886753899a402a77a7c3b43aec99b8ea05f69b0090c0a4f0"
+    },
+    {
+      "file": "09_history_and_settings.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/09_history_and_settings.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 37,
+          "images": {
+            "placements": 2,
+            "files": [
+              "history.png",
+              "settings-menu.png"
+            ],
+            "max_frame_share": 0.0288
+          },
+          "icons": 0,
+          "geometry": {
+            "svg_elements": {
+              "rect": 2,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 11,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 1,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Consolas, Courier New, monospace",
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 37,
+        "tspan_elements": 5
+      },
+      "passed": true,
+      "source_sha256": "8814f282605e36ea235f07343035423edddcee60073f7a5ea32ea4387957c1e6"
+    },
+    {
+      "file": "10_troubleshooting.svg",
+      "path": "/Users/ilonapushilina/Desktop/Ohmypi/projects/omp-code-guide_ppt169_20260820/svg_output/10_troubleshooting.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Golos Text): Golos Text, Arial, Helvetica Neue, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 30,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 2,
+          "geometry": {
+            "svg_elements": {
+              "rect": 3,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 13,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 1,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 1,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Consolas, Courier New, monospace",
+          "Golos Text, Arial, Helvetica Neue, sans-serif"
+        ],
+        "text_elements": 30,
+        "tspan_elements": 17
+      },
+      "passed": true,
+      "source_sha256": "2bf0a004b44edfec9e335d27f591b4680a0bf7238025b50f951cdfd0b4b0e308"
+    }
+  ]
+}

@@ -4,9 +4,13 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { MAX_SNIPPET_CHARS, type Attachment } from "./attachments";
 import { ChatViewProvider } from "./chatViewProvider";
-import { OmpSession, type DiffStore } from "./ompSession";
+import { OmpSession, type DiffStore, type SessionInfo } from "./ompSession";
 import { KEYED_PROVIDERS } from "./providers";
+import { SessionBoardProvider } from "./sessionBoard";
+import { RemoteControlService, type RemoteGrant } from "./remoteControlService";
 import { loadBundle, resolveLanguage, setBundle, t } from "./l10n.ts";
+
+let activeRemoteControl: RemoteControlService | undefined;
 
 const MODELS_YML_TEMPLATE = `# ~/.omp/agent/models.yml — custom model providers for the omp CLI.
 #
@@ -30,6 +34,14 @@ const MODELS_YML_TEMPLATE = `# ~/.omp/agent/models.yml — custom model provider
 
 function modelsYmlPath(): string {
   return path.join(os.homedir(), ".omp", "agent", "models.yml");
+}
+
+/** Row clicks pass an id; native tree context actions pass the row object. */
+function sessionCommandId(arg?: SessionInfo | string): string | undefined {
+  if (typeof arg === "string") {
+    return arg || undefined;
+  }
+  return arg?.id || undefined;
 }
 
 /**
@@ -89,11 +101,11 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   /** Open a fresh chat session as its own editor-area tab, to the right. */
-  async function openChatTab(): Promise<vscode.WebviewPanel | undefined> {
+  async function openChatTab(forcedCwd?: string): Promise<vscode.WebviewPanel | undefined> {
     // Multi-root: each chat's agent runs in one folder — ask which.
     const folders = vscode.workspace.workspaceFolders ?? [];
-    let cwd: string | undefined;
-    if (folders.length > 1) {
+    let cwd: string | undefined = forcedCwd;
+    if (!cwd && folders.length > 1) {
       const picked = await vscode.window.showWorkspaceFolderPick({
         placeHolder: t("Which folder should this chat's agent work in?"),
       });
@@ -124,6 +136,7 @@ export function activate(context: vscode.ExtensionContext): void {
       onReveal: () => {
         panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Beside);
       },
+      onClose: () => panel.dispose(),
     }, diffStore, cwd);
     chatPanels.set(panel, session);
     panel.onDidDispose(() => {
@@ -170,6 +183,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const provider = new ChatViewProvider(context, output, () => {
     openChatTab();
   }, onSessionState, diffStore);
+  const board = new SessionBoardProvider();
+  const remoteControl = new RemoteControlService(context, output, {
+    createSession: async (workspaceRoot) => {
+      const panel = await openChatTab(workspaceRoot);
+      return panel ? chatPanels.get(panel) : undefined;
+    },
+  });
+  activeRemoteControl = remoteControl;
+  void remoteControl.restore().catch((error) => {
+    output.appendLine(`[remote] restore failed: ${String(error)}`);
+  });
 
   function restartAllSessions(): Promise<void> {
     const sessions: Promise<void>[] = [];
@@ -219,6 +243,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     provider,
+    board,
+    remoteControl,
     statusBar,
     vscode.workspace.registerTextDocumentContentProvider("ompcode-diff", {
       provideTextDocumentContent: (uri) => diffContents.get(uri.path) ?? "",
@@ -240,6 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration("ompcode.language")) {
         applyLanguage(context, output);
         OmpSession.forEachActive((session) => session.reloadHtml());
+        board.refresh();
       }
       if (e.affectsConfiguration("ompcode")) {
         output.appendLine("[omp] configuration changed — restarting all sessions");
@@ -249,8 +276,103 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
+    vscode.window.registerTreeDataProvider(SessionBoardProvider.viewType, board),
 
     vscode.commands.registerCommand("ompcode.newSession", () => void openChatTab()),
+
+    vscode.commands.registerCommand("ompcode.remoteStart", async () => {
+      const origin = OmpSession.anyActive() ?? await revealChatTab();
+      if (!origin) return;
+      const picked = await vscode.window.showQuickPick<{
+        label: string;
+        description: string;
+        grant: RemoteGrant;
+      }>([
+        {
+          label: t("Current session (recommended)"),
+          description: t("This one chat only. Every other chat, and every other project, stays invisible to the phone."),
+          grant: "current",
+        },
+        {
+          label: t("All sessions"),
+          description: t("Every chat in the project folders open right now, grouped by project on the phone — including chats opened in those folders later. A folder opened after pairing needs a new pairing."),
+          grant: "all",
+        },
+        {
+          label: t("All sessions + credentials"),
+          description: t("As above, and the phone may change provider API keys. Grant this only to a phone you control."),
+          grant: "all-with-credentials",
+        },
+      ], {
+        title: t("OMP Code Remote Control: desktop grant"),
+        placeHolder: t("Choose exactly what the phone may control"),
+      });
+      if (!picked) return;
+      try {
+        await remoteControl.start(origin, picked.grant);
+      } catch (error) {
+        await vscode.window.showErrorMessage(t("Remote Control could not start: {0}", String(error)));
+      }
+    }),
+
+    // The picker exists to make the scope an explicit choice. A button whose own
+    // label names that scope is the same choice with one less step, so this skips
+    // the picker — and only for "all", which never includes credential access.
+    vscode.commands.registerCommand("ompcode.remoteStartAllSessions", async () => {
+      const origin = OmpSession.anyActive() ?? await revealChatTab();
+      if (!origin) return;
+      try {
+        await remoteControl.start(origin, "all");
+      } catch (error) {
+        await vscode.window.showErrorMessage(t("Remote Control could not start: {0}", String(error)));
+      }
+    }),
+    vscode.commands.registerCommand("ompcode.remoteOpen", () => remoteControl.openStatusPanel()),
+    vscode.commands.registerCommand("ompcode.remoteRefreshPairing", async () => {
+      if (!remoteControl.canRefreshPairing()) {
+        await vscode.window.showInformationMessage(
+          t("There is no Remote Control room to refresh. Start one with “Connect a phone…”."),
+        );
+        return;
+      }
+      // Re-minting inside a live room is not a new grant, so it needs no second
+      // scope prompt. It does need one when a phone is already enrolled: whoever
+      // scans the new code takes that phone's place.
+      if (remoteControl.hasPairedDevice()) {
+        const proceed = t("Show a new QR");
+        const answer = await vscode.window.showWarningMessage(
+          t("A phone is already paired. Whoever scans the new QR replaces it."),
+          { modal: true },
+          proceed,
+        );
+        if (answer !== proceed) return;
+      }
+      const refreshed = await remoteControl.refreshPairing();
+      if (!refreshed) {
+        await vscode.window.showErrorMessage(t("The pairing QR could not be refreshed."));
+      }
+    }),
+    vscode.commands.registerCommand("ompcode.remoteCopyPairing", async () => {
+      const copied = await remoteControl.copyPairingUri();
+      await vscode.window.showInformationMessage(copied
+        ? t("OMP Code pairing link copied. Treat it like a short-lived password.")
+        : t("No unexpired pairing link is available."));
+    }),
+    vscode.commands.registerCommand("ompcode.remoteStatus", async () => {
+      await remoteControl.openStatusPanel();
+    }),
+    vscode.commands.registerCommand("ompcode.remoteStop", async () => {
+      const stop = t("Stop and revoke");
+      const selected = await vscode.window.showWarningMessage(
+        t("Stop Remote Control and permanently revoke the enrolled phone?"),
+        { modal: true },
+        stop,
+      );
+      if (selected === stop) {
+        await remoteControl.stop(true);
+        await vscode.window.showInformationMessage(t("OMP Code Remote Control stopped and revoked."));
+      }
+    }),
 
     // Title-bar entry point: the chat opens as an editor tab beside the code,
     // not as the left sidebar view.
@@ -258,6 +380,30 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand("ompcode.showHistory", async () => {
       (await revealChatTab())?.showHistory();
+    }),
+
+    // A row click carries its id; inline/context actions receive SessionInfo.
+    vscode.commands.registerCommand("ompcode.sessionReveal", (arg?: SessionInfo | string) => {
+      const id = sessionCommandId(arg);
+      if (!id) {
+        void revealChatTab();
+        return;
+      }
+      SessionBoardProvider.findSession(id)?.reveal();
+    }),
+    vscode.commands.registerCommand("ompcode.sessionAbort", (arg?: SessionInfo | string) => {
+      const id = sessionCommandId(arg);
+      if (!id) {
+        return;
+      }
+      SessionBoardProvider.findSession(id)?.abort();
+    }),
+    vscode.commands.registerCommand("ompcode.sessionClose", (arg?: SessionInfo | string) => {
+      const id = sessionCommandId(arg);
+      if (!id) {
+        return;
+      }
+      SessionBoardProvider.findSession(id)?.requestClose();
     }),
 
     ...KEYED_PROVIDERS.map((p) =>
@@ -433,8 +579,16 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
+  const remoteControl = activeRemoteControl;
+  activeRemoteControl = undefined;
+  // Preserve enrolled credentials for restore, but synchronously drain the
+  // transport and remove plaintext attachment staging on normal shutdown.
+  if (remoteControl) {
+    await remoteControl.stop(false);
+    remoteControl.dispose();
+  }
   // Stop every live session's omp process so we don't leave orphans on
   // extension deactivation (editor tabs + sidebar share OmpSession.active).
-  OmpSession.forEachActive((session) => session.dispose());
+  OmpSession.forEachActive((session) => session.forceDispose());
 }
