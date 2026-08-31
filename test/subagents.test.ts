@@ -238,3 +238,34 @@ test("rows of the same group keep a stable oldest-first order", () => {
     ["a", "b"],
   );
 });
+
+test("a stale get_subagents answer cannot resurrect a finished subagent", () => {
+  // The reattach ask races the frames exactly like an in-flight progress
+  // frame: omp's answer may still say "running" for an agent whose terminal
+  // lifecycle frame landed first.
+  const state = reduce([lifecycle("started"), lifecycle("completed")]);
+  const merged = reduceSubagentList(
+    state,
+    { data: { subagents: [{ id: "worker", agent: "scout", status: "running" }] } },
+    9_999,
+  );
+  assert.equal(merged.get("worker")?.status, "completed");
+});
+
+test("get_subagents entries carry the detached flag", () => {
+  // Lifecycle and progress both honour payload.detached; the reattach merge
+  // used to drop it, so a detached agent came back looking attached.
+  const before = reduce([lifecycle("started", { detached: false })]);
+  const kept = reduceSubagentList(
+    before,
+    { data: { subagents: [{ id: "worker", status: "running" }] } },
+    2,
+  );
+  assert.equal(kept.get("worker")?.detached, false);
+  const flagged = reduceSubagentList(
+    before,
+    { data: { subagents: [{ id: "worker", status: "running", detached: true }] } },
+    3,
+  );
+  assert.equal(flagged.get("worker")?.detached, true);
+});
