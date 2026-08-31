@@ -83,11 +83,13 @@ import {
 } from "./remoteRevocation.ts";
 import { RemoteSerialQueue } from "./remoteSerialQueue.ts";
 import { RemoteCommandScheduler } from "./remoteCommandScheduler.ts";
+import { RemoteHostLease } from "./remoteHostLease.ts";
 
 const SECRET_KEY = "ompcode.remote.secrets.v1";
 const DURABLE_KEY = "ompcode.remote.durable.v1";
 const LAST_EPOCH_KEY = "ompcode.remote.lastEpoch.v1";
 const REVOKED_EPOCH_KEY = "ompcode.remote.revokedEpoch.v1";
+const HOST_RETRY_MS = 15_000;
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 const CAPABILITY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_EVENT_JSON_BYTES = 220 * 1024;
@@ -257,6 +259,8 @@ export class RemoteControlService implements vscode.Disposable {
   private scopeRefreshQueue: Promise<void> = Promise.resolve();
   private readonly durableWriter = new OrderedSnapshotWriter<StoredDurableRemoteState | undefined>();
   private readonly secretWriter = new OrderedSnapshotWriter<string | undefined>();
+  private readonly hostLease: RemoteHostLease;
+  private hostRetryTimer: NodeJS.Timeout | undefined;
   private cleanupTimer: NodeJS.Timeout;
   private capabilityRefreshTimer: NodeJS.Timeout | undefined;
   private pairingExpiryTimer: NodeJS.Timeout | undefined;
@@ -274,6 +278,7 @@ export class RemoteControlService implements vscode.Disposable {
     this.context = context;
     this.output = output;
     this.options = options;
+    this.hostLease = new RemoteHostLease(context.globalState);
     this.subscriptions = [
       OmpSession.onRemoteMessage((event) => this.onSessionMessage(event)),
       OmpSession.onBoardChange(() => this.onSessionBoardChange()),
@@ -356,8 +361,13 @@ export class RemoteControlService implements vscode.Disposable {
     this.acquireScopedLeases();
     this.scheduleCapabilityRefresh();
     this.schedulePairingExpiry();
-    this.openTransport();
-    this.output.appendLine(`[remote] restored encrypted room at epoch ${stored.keyEpoch}`);
+    if (await this.acquireHostLease()) {
+      this.openTransport();
+      this.output.appendLine(`[remote] restored encrypted room at epoch ${stored.keyEpoch}`);
+    } else {
+      this.output.appendLine(`[remote] restored encrypted room at epoch ${stored.keyEpoch}; another window is hosting it, standing by`);
+      this.scheduleHostRetry();
+    }
     return true;
     } finally {
       this.restoreInProgress = false;
@@ -365,6 +375,11 @@ export class RemoteControlService implements vscode.Disposable {
   }
 
   async start(origin: OmpSession, grant: RemoteGrant): Promise<string> {
+    // Acquire before stop(true): a window that does not hold the lease must
+    // report instead of revoking the room another window is hosting.
+    if (!(await this.acquireHostLease())) {
+      throw new Error(t("Another VS Code window is already hosting Remote Control. Stop it there or close that window first."));
+    }
     await this.stop(true);
     const previousEpoch = this.context.globalState.get<number>(LAST_EPOCH_KEY, 0);
     const rotated = rotateRemoteSecrets(previousEpoch);
@@ -420,7 +435,13 @@ export class RemoteControlService implements vscode.Disposable {
       this.context.globalState.update(LAST_EPOCH_KEY, rotated.keyEpoch),
     ]);
     this.acquireScopedLeases();
-    this.openTransport();
+    if (await this.acquireHostLease()) {
+      this.openTransport();
+    } else {
+      // Lost the re-acquisition race after stop(true) released the lease: the
+      // pairing URI still names this room, so hand hosting to the winner.
+      this.scheduleHostRetry();
+    }
     this.schedulePairingExpiry();
     await this.openStatusPanel();
     return this.pairingUri;
@@ -434,6 +455,8 @@ export class RemoteControlService implements vscode.Disposable {
     this.transport?.stop();
     this.transport = undefined;
     this.status = "stopped";
+    this.clearHostRetryTimer();
+    await this.hostLease.release();
     this.clearConnections("remote control stopped");
     this.commandResultStreams.clear();
     if (this.capabilityRefreshTimer) clearTimeout(this.capabilityRefreshTimer);
@@ -533,13 +556,96 @@ export class RemoteControlService implements vscode.Disposable {
     if (this.disposed) return;
     this.disposed = true;
     clearInterval(this.cleanupTimer);
+    this.clearHostRetryTimer();
     if (this.capabilityRefreshTimer) clearTimeout(this.capabilityRefreshTimer);
     if (this.pairingExpiryTimer) clearTimeout(this.pairingExpiryTimer);
+    this.hostLease.stopHeartbeat();
+    void this.hostLease.release().catch((error) =>
+      this.output.appendLine(`[remote] host lease release failed: ${String(error)}`));
     for (const subscription of this.subscriptions) subscription.dispose();
     this.transport?.stop();
     for (const lease of this.leases.values()) lease.dispose();
     this.leases.clear();
     this.panel?.dispose();
+  }
+
+  /**
+   * Single-host arbitration: only the window holding the `globalState` host
+   * lease may connect to the relay room; everyone else stands by so the relay
+   * never kicks duplicate hosts (4009) into a reconnect flap.
+   */
+  private async acquireHostLease(): Promise<boolean> {
+    if (this.disposed) return false;
+    if (!(await this.hostLease.tryAcquire())) return false;
+    this.hostLease.startHeartbeat(() => this.onHostLeaseLost());
+    return true;
+  }
+
+  private scheduleHostRetry(): void {
+    if (this.hostRetryTimer || this.disposed) return;
+    this.hostRetryTimer = setInterval(() => {
+      void this.retryHostAcquisition().catch((error) =>
+        this.output.appendLine(`[remote] host takeover check failed: ${String(error)}`));
+    }, HOST_RETRY_MS);
+  }
+
+  private clearHostRetryTimer(): void {
+    clearInterval(this.hostRetryTimer);
+    this.hostRetryTimer = undefined;
+  }
+
+  /** A lost lease means another window owns the room; disconnect instead of fighting it. */
+  private onHostLeaseLost(): void {
+    if (!this.transport) return;
+    this.transport.stop();
+    this.transport = undefined;
+    this.status = "stopped";
+    this.clearConnections("another window took over hosting");
+    this.output.appendLine("[remote] another window holds the host lease; disconnected");
+    void this.refreshPanel();
+    this.scheduleHostRetry();
+  }
+
+  /**
+   * Standby windows poll the lease so a closed host window fails over to a
+   * survivor. Storage is re-read on takeover: the previous owner may have
+   * revoked or rotated the room while this window stood by.
+   */
+  private async retryHostAcquisition(): Promise<void> {
+    if (this.disposed || this.transport || this.restoreInProgress) return;
+    if (!(await this.hostLease.tryAcquire())) return;
+    const stored = await this.readSecrets();
+    const revokedThroughEpoch = this.context.globalState.get<number>(REVOKED_EPOCH_KEY, 0);
+    if (!stored || isRemoteEpochRevoked(stored.keyEpoch, revokedThroughEpoch)) {
+      this.secrets = undefined;
+      this.durable = undefined;
+      this.pairingUri = undefined;
+      await this.hostLease.release();
+      void this.refreshPanel();
+      return;
+    }
+    if (this.secrets?.keyEpoch === stored.keyEpoch) {
+      // Same room this window already restored; in-memory state is current.
+      await this.writeSecrets();
+      this.hostLease.startHeartbeat(() => this.onHostLeaseLost());
+      this.clearHostRetryTimer();
+      this.openTransport();
+      this.output.appendLine(`[remote] took over hosting the encrypted room at epoch ${stored.keyEpoch}`);
+      return;
+    }
+    // Rotated room or no prepared state: run the full restore. Its own lease
+    // acquisition succeeds trivially — this window already owns the lease.
+    this.secrets = undefined;
+    this.durable = undefined;
+    this.pairingUri = undefined;
+    const restored = await this.restore();
+    if (restored) {
+      this.clearHostRetryTimer();
+    } else {
+      // Nothing hostable (revoked, unrestorable, or deferred until a session
+      // appears): free the lease and let the watcher try again later.
+      await this.hostLease.release();
+    }
   }
 
   private openTransport(): void {

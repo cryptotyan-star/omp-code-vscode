@@ -505,5 +505,6 @@
   "Open which port?": "Какой порт открыть?",
   "Could not open the port: {0}": "Не удалось открыть порт: {0}",
   "A chat tab was not restored: the workspace it belonged to no longer exists.": "Вкладка чата не восстановлена: workspace, которому она принадлежала, больше не существует.",
-  "A chat tab was closed: the workspace it belonged to no longer exists.": "Вкладка чата закрыта: workspace, которому она принадлежала, больше не существует."
+  "A chat tab was closed: the workspace it belonged to no longer exists.": "Вкладка чата закрыта: workspace, которому она принадлежала, больше не существует.",
+  "Another VS Code window is already hosting Remote Control. Stop it there or close that window first.": "Remote Control уже запущен в другом окне VS Code. Остановите его там или закройте то окно."
 }
