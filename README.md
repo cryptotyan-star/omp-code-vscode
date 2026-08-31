@@ -152,10 +152,18 @@ Two ways, mixable:
 opens; if the provider asks for a code back, the panel shows one with a copy button. The
 credential lands in the agent's own store, so it survives extension updates.
 
-**API keys.** Anthropic, Kimi (Moonshot), GLM (Zhipu BigModel) and Qwen (Alibaba Coding
-Plan) each have a palette command and a field on the setup card. Keys live in **VS Code
-Secret Storage** — never in `settings.json` — and are handed to the agent process as
-environment variables.
+**API keys.** Anthropic, Kimi (Moonshot), GLM (Zhipu BigModel), OpenAI (ChatGPT), Qwen
+(Alibaba Coding Plan) and GLM BigModel (pay-as-you-go) each have a palette command and a
+field on the setup card. Keys live in **VS Code Secret Storage** — never in
+`settings.json` — and are handed to the agent process as environment variables.
+
+**GLM, twice over.** The two GLM rows are two different accounts, usable at the same
+time. `GLM (Zhipu BigModel)` is the Coding Plan subscription (`ZHIPU_API_KEY`,
+`open.bigmodel.cn/api/coding/paas/v4`). `GLM BigModel (pay-as-you-go)` is an open-platform
+key from [bigmodel.cn/apikey](https://bigmodel.cn/apikey/platform), billed per token
+against your balance — ten GLM models from 4.5 to 5.3, priced in the picker. omp has no
+env var for that endpoint, so this one key is written into `~/.omp/agent/models.yml` when
+the agent starts, and removed again when you clear it.
 
 A key that starts returning 401 is called out with an offer to remove it, because a stale
 key is worse than no key: the provider still advertises its whole model range and every
@@ -225,6 +233,46 @@ The **Sessions** view in the OMP Code sidebar lists every running chat — the s
 plus every editor tab — with its model, its state (working, waiting for an approval,
 idle), and the session cost. Clicking a row brings that chat to the front; a running row
 gets an inline stop button, tabs get a close button.
+
+### Workspaces (git worktrees)
+
+A workspace is one git worktree, one branch and one agent of its own — the way to run
+several agents on the same repository without them fighting over the same files.
+
+**New Workspace** (the `$(git-branch)` button on the Sessions view) asks for a name, the
+branch to start from, a model, a tool-access tier and an optional first prompt. It then
+creates `<repo>.worktrees/<name>` beside the repository, branches `omp/<name>` at the
+commit the base branch is on right now, runs the repo's setup commands and opens a chat
+already pointed at that folder. The model and the tier belong to that workspace, not to
+the window: changing the global default later leaves running agents where they are.
+
+Rows appear on the Sessions board under **Workspaces**, with the branch, the model and
+the live cost. A row's actions reveal the chat, open a terminal in the worktree, or
+delete it; deleting names exactly what would be lost — uncommitted files, ignored files
+such as `.env`, and commits that exist only on that branch — and asks before it does.
+`OMP Code: Open Workspace in New Window`, `OMP Code: Run Workspace Setup` and the rest
+are on the command palette.
+
+A fresh worktree has no `node_modules`, no `.env` and no build output — git copies none
+of it. Put the commands that fix that in `.ompcode/workspace.json` at the repository
+root:
+
+```json
+{
+  "setup": ["npm ci", "cp ../.env ."],
+  "run": ["npm run dev"],
+  "teardown": ["docker compose down"],
+  "cwd": "."
+}
+```
+
+Every field takes a single string or a list of them; `setup` commands are joined with
+`&&` and run in a visible terminal, so a failing step stops the rest. `cwd` is relative
+to the worktree. A repository already carrying Superset's `.superset/config.json` works
+as-is — the format is the same (only the format: none of Superset's code is used).
+`.ompcode/workspace.local.json` is the personal, git-ignored companion; its `before` and
+`after` lists wrap the committed `setup` list, which is how you add a machine-specific
+step without editing a file the whole team shares.
 
 ### Android Remote Control
 
@@ -311,6 +359,9 @@ stream timeouts and tool-schema shape per provider — overriding those makes th
 | `ompcode.verifyModels` | `true` | Probe each model once and hide the ones that fail. |
 | `ompcode.thinkingLevel` | `auto` | `off`…`max`, or `auto`. |
 | `ompcode.approvalMode` | `always-ask` | `always-ask`, `write`, `yolo`. |
+| `ompcode.worktreeBaseDir` | `""` | Where workspace worktrees go; empty means `<repo>.worktrees`. |
+| `ompcode.workspaceBranchPrefix` | `omp/` | Prefix for the branch a new workspace creates. |
+| `ompcode.workspaceSetup` | `ask` | Run a workspace's setup commands: `auto`, `ask`, `never`. |
 | `ompcode.modelProfiles` | `[]` | Per-family behaviour rows, layered over the built-ins. |
 | `ompcode.customProviders` | `{}` | Extra providers merged into `models.yml`. |
 | `ompcode.resumeLastSession` | `false` | New chats continue the most recent session. |

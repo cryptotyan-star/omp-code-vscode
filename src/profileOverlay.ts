@@ -1,5 +1,6 @@
 import type { ResolvedProfile } from "./modelProfiles";
 import * as YAML from "yaml";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -96,6 +97,34 @@ function isNonEmptyString(s: string | undefined): s is string {
 }
 
 /**
+ * Write `content` to `filePath` so a concurrent reader sees either the whole
+ * old file or the whole new one, never a half-written mix.
+ *
+ * Overlay files are named after the model *family*, not the session, so every
+ * process of that family shares one path. Workspaces spawn agents in parallel
+ * — several may materialise the same family at the same moment — and a plain
+ * writeFile truncates before it fills, leaving a window in which an omp child
+ * starting up reads a truncated overlay and either fails validation or, worse,
+ * silently starts without the tool-access settings it was meant to enforce.
+ * A write to a unique sibling followed by rename is atomic within the
+ * directory, so racing writers can only overwrite each other whole. The
+ * temporary file is a sibling rather than an OS temp file because rename is
+ * only atomic within one filesystem.
+ */
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tmp = `${filePath}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await fs.writeFile(tmp, content, "utf8");
+    await fs.rename(tmp, filePath);
+  } catch (err) {
+    // Best-effort cleanup: a failed rename leaves the temp file behind, and
+    // these accumulate in a directory the user never looks at.
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/**
  * Serialise the profile's `spawn.overlay` settings bag to `<dir>/<family>.yml`
  * and return the absolute path, for the caller to pass to omp as
  * `--config <path>`.
@@ -126,7 +155,7 @@ export async function writeOverlay(
 
   try {
     await fs.mkdir(absDir, { recursive: true });
-    await fs.writeFile(filePath, yaml, "utf8");
+    await writeFileAtomic(filePath, yaml);
   } catch (err) {
     throw new Error(
       `Failed to write overlay file ${filePath}: ${
@@ -175,7 +204,7 @@ export async function writeAppendPrompt(
 
   try {
     await fs.mkdir(absDir, { recursive: true });
-    await fs.writeFile(filePath, content, "utf8");
+    await writeFileAtomic(filePath, content);
   } catch (err) {
     throw new Error(
       `Failed to write append-prompt file ${filePath}: ${

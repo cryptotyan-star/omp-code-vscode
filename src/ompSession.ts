@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { OmpProcess, type OmpFrame } from "./ompProcess";
-import { syncCustomProviders } from "./modelsSync";
+import { pruneCustomProvider, syncCustomProviders } from "./modelsSync";
 import { isNoisyNotice } from "./notices";
 import { runDiagnostics } from "./diagnostics";
 import { formatTranscript, listSessions } from "./sessions";
@@ -25,11 +25,18 @@ import {
   type ProbeCandidate,
   type ProbeResults,
 } from "./probe";
-import { KEYED_PROVIDERS, LOGIN_PROVIDERS } from "./providers";
+import { CONFIG_PROVIDERS, KEYED_PROVIDERS, LOGIN_PROVIDERS } from "./providers";
 import { needsManualLoad, readInstructionFile } from "./instructionFiles";
 import { currentBundle, currentLanguage, t } from "./l10n.ts";
 import { overlayArgs, writeAppendPrompt, writeOverlay } from "./profileOverlay";
 import { planRevert, revertStateHash } from "./revert";
+import {
+  isSubagentFrame,
+  reduceSubagentFrame,
+  reduceSubagentList,
+  subagentSnapshot,
+  type SubagentInfo,
+} from "./subagents";
 import {
   type ApprovalResponse,
   type JsonValue,
@@ -59,6 +66,13 @@ const PROBE_STATE_KEY = "ompcode.probeResults";
  * to six modes each — Claude Code alone has six — so the picker presents
  * these as the nearest rung, never as an equivalence.
  */
+/**
+ * Coalescing window for subagent progress. One subagent emitted 29 progress
+ * frames in eight seconds in a live run, and every `post()` is mirrored to a
+ * paired phone as well as the webview, so the raw rate is not worth relaying.
+ */
+const SUBAGENT_FLUSH_MS = 250;
+
 export const APPROVAL_MODES = ["always-ask", "write", "yolo"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
@@ -75,10 +89,129 @@ export interface SessionInfo {
   provider: string;
   /** Board-facing lifecycle: startup, an approval waiting, a running turn, idle. */
   status: "starting" | "asks" | "working" | "idle";
+  /**
+   * A turn is queued or running — true from the moment a prompt is handed to
+   * this session until `agent_end`.
+   *
+   * `status` cannot answer this: it turns "working" only on the `agent_start`
+   * frame, which arrives a round trip (and, for a freshly spawned agent, a
+   * whole handshake) after the prompt was sent. Anything that reads "idle" as
+   * "this agent has stopped" — the orchestrator's `workspace_wait` above all —
+   * needs the gap covered, or it decides a worker finished before it started.
+   */
+  pending: boolean;
   /** Session cost in dollars from the last get_session_stats. */
   cost: number;
+  /**
+   * Subagents omp spawned for this session, running ones first. Terminated
+   * agents stay in the list: their cost and transcript outlive the run.
+   */
+  subagents: SubagentInfo[];
   /** False for the sidebar session — its surface cannot be closed. */
   closable: boolean;
+  /** Workspace (git worktree) this session belongs to, when it was opened for one. */
+  workspaceId?: string;
+  /** Branch of that workspace — the board shows it instead of a bare folder name. */
+  branch?: string;
+}
+
+/**
+ * Per-session pins that outrank the window's own settings.
+ *
+ * A workspace session runs in its own worktree on its own model and approval
+ * tier, so it cannot read those from `ompcode.*`: those settings are shared by
+ * every session in the window, and changing one for a new workspace would move
+ * the ground under all the others. Every field is optional — a session without
+ * overrides behaves exactly as before.
+ */
+export interface SessionOverrides {
+  /** "provider/modelId" this process runs on, instead of `ompcode.defaultModel`. */
+  model?: string;
+  /** Approval tier this process was spawned with, instead of `ompcode.approvalMode`. */
+  approvalMode?: ApprovalMode;
+  /** Workspace record id, surfaced on the board row. */
+  workspaceId?: string;
+  /** Branch checked out in the workspace's worktree. */
+  branch?: string;
+  /** JSONL of the conversation to reattach to on the first handshake. */
+  sessionFile?: string;
+  /**
+   * Identity of the editor tab this session is attached to, echoed into the
+   * webview so `vscode.setState` can carry it across a window reload; see
+   * src/chatTabs.ts. Sessions with no tab of their own (the sidebar) leave it
+   * unset and are simply never restored.
+   */
+  tabId?: string;
+  /** Called whenever the live conversation's JSONL path changes, so the owner can persist it. */
+  onSessionFile?: (file: string) => void;
+  /**
+   * Called when the user switches this session's model, so the owner can move
+   * the pin with them — otherwise the old pin wins again on the next restart.
+   */
+  onModel?: (model: string) => void;
+  /** Same for the approval tier, which is a spawn argument and needs a restart. */
+  onApprovalMode?: (mode: ApprovalMode) => void;
+  /**
+   * Whether this session drives other workspaces through host tools.
+   *
+   * Left unset it follows the session's role: a plain chat orchestrates, a
+   * session opened *for* a workspace does not. A worker that could call
+   * `workspace_create` would spawn workers of its own, and nothing in the
+   * protocol stops that recursion once it starts.
+   */
+  orchestrator?: boolean;
+}
+
+/**
+ * One host tool as omp's `set_host_tools` expects it (its
+ * `RpcHostToolDefinition`). Declared structurally rather than imported: omp is
+ * not a build dependency of the extension, and the session must not reach into
+ * the orchestrator module it is driven by.
+ */
+export interface HostToolDefinition {
+  name: string;
+  label?: string;
+  description: string;
+  /** JSON Schema of the arguments object. */
+  parameters: Record<string, unknown>;
+  hidden?: boolean;
+  loadMode?: string;
+}
+
+/**
+ * The half of `HostToolBridge` the session talks to.
+ *
+ * The bridge is built in extension.ts (it needs the Orchestrator, which needs
+ * the WorkspaceManager, which needs sessions) and handed down through
+ * {@link OmpSession.setHostToolBridge}. Depending on the concrete class here
+ * would close that loop into an import cycle.
+ */
+export interface HostToolBridgeLike {
+  /**
+   * The tools this bridge answers, when it carries them itself. The session
+   * announces these at handshake; `setHostToolBridge`'s second argument wins
+   * over them, and with neither the session registers nothing and says so.
+   *
+   * A method rather than a property because the bridge derives it from the
+   * handlers it was built with, so there is no array to hold.
+   */
+  definitions?(): readonly HostToolDefinition[];
+  /** Must return immediately: omp issues parallel calls in a single turn. */
+  handleCall(frame: {
+    id: string;
+    toolCallId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+  }): void;
+  handleCancel(frame: { id: string; targetId: string }): void;
+  /** The agent this bridge answered is gone; settle everything still pending. */
+  abortAll(reason: string): void;
+  /**
+   * The session itself is gone for good. Unlike `abortAll` this is permanent:
+   * a call still buffered in the parser when the tab closed must be refused,
+   * not started. Optional so a host can hand in a bridge that only aborts.
+   */
+  dispose?(): void;
 }
 
 /** Sanitized messages mirrored to an authenticated Remote Control device. */
@@ -236,6 +369,16 @@ export class OmpSession implements vscode.Disposable {
   private routedTurn: RoutedTurn | undefined;
   /** Covers the prompt-ack → agent_start gap as well as an actively streaming turn. */
   private turnPendingOrActive = false;
+  /**
+   * Sends handed to this session that have not reached the agent yet.
+   *
+   * `turnPendingOrActive` only starts at the `prompt` request itself, so it
+   * misses everything before it: the handshake a workspace's opening prompt
+   * waits on, and the model-operation queue. A counter rather than a flag
+   * because a steer can be handed over while an earlier send is still in
+   * flight, and the first one to land must not clear the other's mark.
+   */
+  private queuedSends = 0;
   /** A published session outlives a closed editor surface until Remote Control releases it. */
   private remoteLeaseCount = 0;
   private surfaceClosed = false;
@@ -249,6 +392,30 @@ export class OmpSession implements vscode.Disposable {
   private readonly uiPendingFrames = new Map<string, OmpFrame>();
   /** Last session cost in dollars from get_session_stats. */
   private lastCost = 0;
+
+  // ------------------------------------------------------------- host tools
+
+  /** Orchestration bridge, when extension.ts wired one into this session. */
+  private hostToolBridge: HostToolBridgeLike | undefined;
+  /** Definitions announced with `set_host_tools` on every handshake. */
+  private hostToolDefs: readonly HostToolDefinition[] = [];
+  /**
+   * Tool name per in-flight call id. `host_tool_result` carries only the id,
+   * so without this the chat line for a finished call could not name the tool.
+   */
+  private readonly hostToolCalls = new Map<string, string>();
+
+  /**
+   * Subagents seen on this process, keyed by omp's subagent id. Kept by the
+   * extension rather than fetched on demand: `get_subagents` answers with the
+   * running agents only, so a finished one would vanish from the board the
+   * moment it succeeded, taking its cost and transcript link with it.
+   */
+  private subagentState = new Map<string, SubagentInfo>();
+  /** Pending coalesced flush of subagent progress; see `noteSubagentProgress`. */
+  private subagentFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  /** A progress frame arrived while the flush window was open. */
+  private subagentDirty = false;
   /** Title the agent set for this session (`setTitle`), if any. */
   private sessionTitle = "";
   /** Stable identity for the board; random, never persisted. */
@@ -289,8 +456,12 @@ export class OmpSession implements vscode.Disposable {
           : this.streaming
             ? "working"
             : "idle",
+      pending: this.queuedSends > 0 || this.turnPendingOrActive || this.streaming,
       cost: this.lastCost,
+      subagents: subagentSnapshot(this.subagentState).subagents,
       closable: !this.surfaceClosed && this.callbacks.onClose !== undefined,
+      ...(this.overrides.workspaceId ? { workspaceId: this.overrides.workspaceId } : {}),
+      ...(this.overrides.branch ? { branch: this.overrides.branch } : {}),
     };
   }
 
@@ -345,6 +516,58 @@ export class OmpSession implements vscode.Disposable {
     });
   }
 
+  /**
+   * True when this session may drive workspaces. Explicit override first, then
+   * the role: workspace sessions are workers and never orchestrate.
+   */
+  get orchestrates(): boolean {
+    return this.overrides.orchestrator ?? this.overrides.workspaceId === undefined;
+  }
+
+  /**
+   * Write one raw frame to this session's agent — the transport a
+   * HostToolBridge is built with (`transport: { send: (f) => s.sendHostToolFrame(f) }`,
+   * or just `s.hostToolTransport`).
+   *
+   * Results are addressed by call id, so a frame written after the process
+   * died is dropped on the floor; the bridge hears about that through
+   * `abortAll` instead.
+   */
+  sendHostToolFrame(frame: Record<string, unknown>): void {
+    this.noteHostToolResult(frame);
+    this.proc?.send(frame);
+  }
+
+  /** `sendHostToolFrame` in the shape a bridge takes as its transport. */
+  get hostToolTransport(): { send(frame: Record<string, unknown>): void } {
+    return { send: (frame: Record<string, unknown>): void => this.sendHostToolFrame(frame) };
+  }
+
+  /**
+   * Install the orchestration bridge, and the definitions to announce for it.
+   *
+   * The bridge is built in extension.ts and pushed down here rather than
+   * imported, so a live agent can be told at once and a not-yet-started one
+   * announces the tools on its first handshake. Attaching a bridge is not
+   * itself the switch: `ompcode.orchestratorTools` is read at handshake time,
+   * so toggling it takes effect on the next agent start with no re-wiring.
+   */
+  setHostToolBridge(
+    bridge: HostToolBridgeLike,
+    definitions: readonly HostToolDefinition[] = bridge.definitions?.() ?? [],
+  ): void {
+    this.hostToolBridge = bridge;
+    this.hostToolDefs = definitions;
+    if (definitions.length === 0) {
+      this.output.appendLine(
+        "[omp] host tool bridge attached with no tool definitions — nothing will be registered",
+      );
+    }
+    if (this.initialized && this.proc) {
+      void this.registerHostTools(this.proc);
+    }
+  }
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel,
@@ -352,6 +575,8 @@ export class OmpSession implements vscode.Disposable {
     private readonly diffStore?: DiffStore,
     /** Multi-root workspaces: the folder this session's agent runs in. */
     private readonly sessionCwd?: string,
+    /** Workspace pins that win over the window-wide settings; see SessionOverrides. */
+    private readonly overrides: SessionOverrides = {},
   ) {
     OmpSession.active.add(this);
     OmpSession.notifyBoard();
@@ -379,6 +604,21 @@ export class OmpSession implements vscode.Disposable {
     this.disposeNow();
   }
 
+  /**
+   * Stop this session and wait until its omp process is really gone.
+   *
+   * `dispose()` deliberately keeps the child alive while a Remote Control
+   * device holds a lease, and `stop()` only sends SIGTERM. Deleting a workspace
+   * has to know that the process holding the worktree as its cwd has released
+   * it before the directory is removed — on Windows an open handle there makes
+   * `git worktree remove` fail outright.
+   */
+  async disposeAndWait(): Promise<void> {
+    const proc = this.proc;
+    this.forceDispose();
+    await proc?.whenExited();
+  }
+
   /** Extension shutdown must never leave an orphan child process. */
   forceDispose(): void {
     this.remoteLeaseCount = 0;
@@ -402,9 +642,17 @@ export class OmpSession implements vscode.Disposable {
     this.initialized = false;
     this.streaming = false;
     this.turnPendingOrActive = false;
+    this.queuedSends = 0;
     this.uiPendingIds.clear();
     this.uiPendingFrames.clear();
+    this.resetSubagents();
     this.abandonRoutedTurn();
+    this.hostToolsDown("session disposed");
+    // Permanent, unlike the abort the line above does: this session will never
+    // handshake again, so a host_tool_call still sitting in the stdout parser
+    // must be refused rather than started against a dead process. The
+    // restart/exit paths keep using `hostToolsDown` alone — they do come back.
+    this.hostToolBridge?.dispose?.();
     proc?.stop();
     OmpSession.notifyBoard();
   }
@@ -455,6 +703,7 @@ export class OmpSession implements vscode.Disposable {
     try {
       await this.ensureStarted();
       await this.request({ type: "new_session" });
+      this.resetSubagents(); // the new conversation inherits no subagents
       this.diffSnaps.clear();
       this.diagBaseline.clear();
       this.post({ t: "reset" });
@@ -470,8 +719,12 @@ export class OmpSession implements vscode.Disposable {
       state && typeof state === "object"
         ? (state as Record<string, unknown>).sessionFile
         : undefined;
-    if (typeof file === "string" && file) {
+    if (typeof file === "string" && file && file !== this.lastSessionFile) {
       this.lastSessionFile = file;
+      // The owner (a workspace record) persists this so the conversation can be
+      // reopened after VS Code restarts. Only real moves are reported — every
+      // state push carries the path, and rewriting storage on each would churn.
+      this.overrides.onSessionFile?.(file);
     }
   }
 
@@ -511,6 +764,48 @@ export class OmpSession implements vscode.Disposable {
     }
   }
 
+  /**
+   * First handshake of a session that was opened for an existing workspace:
+   * reattach to the conversation that workspace was last on.
+   *
+   * omp always starts a fresh session on spawn, so reopening a workspace after
+   * a VS Code restart would otherwise face an agent with no memory of its own
+   * worktree. Runs once: every later respawn is a restart, and `restart()` /
+   * the crash path already reattach to the *live* conversation, which by then
+   * has moved past the file the workspace record was created with.
+   */
+  private async resumeOverrideSession(proc: OmpProcess): Promise<boolean> {
+    const sessionPath = this.overrides.sessionFile;
+    if (!sessionPath || this.overrideResumeAttempted) {
+      return false;
+    }
+    this.overrideResumeAttempted = true;
+    try {
+      const result = (await proc.request({ type: "switch_session", sessionPath })) as
+        | { cancelled?: boolean }
+        | undefined;
+      if (this.proc !== proc || result?.cancelled) {
+        return false;
+      }
+      const data = await proc.request({ type: "get_messages" });
+      if (this.proc !== proc) {
+        return false;
+      }
+      this.post({ t: "reset" });
+      this.post({ t: "transcript", messages: this.extractList(data, "messages") });
+      this.lastSessionFile = sessionPath;
+      this.output.appendLine(`[omp] reopened workspace session ${sessionPath}`);
+      return true;
+    } catch (err) {
+      // A stale or deleted JSONL must not stop the workspace from opening: the
+      // agent stays on the empty session it started with.
+      this.output.appendLine(
+        `[omp] could not reopen workspace session ${sessionPath}: ${String(err)}`,
+      );
+      return false;
+    }
+  }
+
   /** Stop the current process (if any) and start a fresh one. */
   async restart(): Promise<void> {
     if (!this.proc && !this.webview) {
@@ -527,7 +822,9 @@ export class OmpSession implements vscode.Disposable {
     this.autoRestartAttempts = 0;
     this.uiPendingIds.clear(); // dialogs of the dying process will never be answered
     this.uiPendingFrames.clear();
+    this.resetSubagents();
     this.abandonRoutedTurn(); // the restored model died with the process
+    this.hostToolsDown("agent restarting");
     proc?.stop();
     OmpSession.notifyBoard();
     try {
@@ -580,6 +877,11 @@ export class OmpSession implements vscode.Disposable {
     const env: NodeJS.ProcessEnv = { ...process.env };
     const injectedEnvKeys: string[] = [];
     for (const p of KEYED_PROVIDERS) {
+      // A provider with no env var carries its key in models.yml instead;
+      // inventing a variable name for it here would only mislead diagnostics.
+      if (!p.envVar) {
+        continue;
+      }
       const key = await this.context.secrets.get(p.secret);
       if (key) {
         env[p.envVar] = key;
@@ -610,8 +912,7 @@ export class OmpSession implements vscode.Disposable {
    */
   private async profileSpawnArgs(cwd: string): Promise<string[]> {
     try {
-      const cfg = vscode.workspace.getConfiguration("ompcode");
-      const target = cfg.get<string>("defaultModel", "").trim();
+      const target = this.configuredModel();
       if (!target) {
         return []; // nothing to resolve against until a model is picked
       }
@@ -640,6 +941,88 @@ export class OmpSession implements vscode.Disposable {
       this.output.appendLine(`[omp] could not apply profile spawn settings: ${String(err)}`);
       return [];
     }
+  }
+
+  /**
+   * "provider/modelId" this process runs on: the session's own pin when it has
+   * one, otherwise the window's default. Read through this everywhere, so the
+   * model chosen at spawn and the one set after the handshake cannot diverge.
+   */
+  private configuredModel(): string {
+    const pinned = this.overrides.model?.trim();
+    if (pinned) {
+      return pinned;
+    }
+    return (
+      vscode.workspace.getConfiguration("ompcode").get<string>("defaultModel", "") ?? ""
+    ).trim();
+  }
+
+  /**
+   * Put the process on {@link configuredModel}. Failures are logged, never
+   * thrown: a model omp does not know must leave a usable agent behind.
+   */
+  private async applyConfiguredModel(proc: OmpProcess): Promise<void> {
+    const target = this.configuredModel();
+    if (!target) {
+      return;
+    }
+    const slash = target.indexOf("/");
+    if (slash <= 0 || slash >= target.length - 1) {
+      this.output.appendLine(`[omp] model "${target}" is not "provider/modelId" — skipped`);
+      return;
+    }
+    try {
+      await proc.request({
+        type: "set_model",
+        provider: target.slice(0, slash),
+        modelId: target.slice(slash + 1),
+      });
+    } catch (err) {
+      this.output.appendLine(
+        `[omp] set_model "${target}" failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Pin this session to a model the user just chose.
+   *
+   * Picking a model in a chat pins it to that chat. Restarts are routine here —
+   * changing the approval tier or any `ompcode.*` value respawns the process —
+   * and `configuredModel()` reads this pin. Without it a restart fell back to
+   * `ompcode.defaultModel`, so a session the user had moved to another model
+   * silently came back on the window default. A pinned session also stops
+   * following later changes of that default, which is the point: the pick was
+   * explicit, and parallel chats on different models are the reason this
+   * extension has per-session models at all.
+   *
+   * Shared by the chat's own picker and by Remote Control's `model.set`, so a
+   * model chosen from the phone survives a restart and a window reload exactly
+   * as one chosen in the panel does. Deliberately *not* used by the dead-model
+   * failover or by a routed turn's temporary swap: those are the machine's
+   * choice, not the user's, and leaving the pin alone is what lets the original
+   * model be retried.
+   */
+  private pinModel(provider: string, modelId: string): void {
+    const pinned = `${provider}/${modelId}`;
+    this.overrides.model = pinned;
+    // Workspace sessions carry the model in their record, so the owner
+    // persists it; a plain chat's tab record keeps it for the restore path.
+    this.overrides.onModel?.(pinned);
+  }
+
+  /**
+   * Whether this session still follows the window-wide setting `key`.
+   *
+   * The configuration watcher restarts every session when any `ompcode.*` value
+   * moves. A session that pinned the value has nothing to pick up from such a
+   * change, and restarting it would throw away a running turn for nothing.
+   */
+  usesSetting(key: "defaultModel" | "approvalMode"): boolean {
+    return key === "defaultModel"
+      ? !this.overrides.model?.trim()
+      : this.overrides.approvalMode === undefined;
   }
 
   /** Build a self-test report; works even when the agent never started. */
@@ -679,7 +1062,9 @@ export class OmpSession implements vscode.Disposable {
     this.turnStartedAt = 0;
     this.uiPendingIds.clear();
     this.uiPendingFrames.clear();
+    this.resetSubagents();
     this.abandonRoutedTurn();
+    this.hostToolsDown("agent replaced");
     stale?.stop();
     OmpSession.notifyBoard();
 
@@ -695,11 +1080,16 @@ export class OmpSession implements vscode.Disposable {
     const cfg = vscode.workspace.getConfiguration("ompcode");
     const ompPath = cfg.get<string>("ompPath", "omp") || "omp";
     const approvalMode = this.approvalSetting().mode;
+    const configured = cfg.get<Record<string, unknown>>("customProviders", {});
     const customProviders = await this.injectProviderKeys(
-      cfg.get<Record<string, unknown>>("customProviders", {}),
+      await this.withShippedProviders(configured),
     );
 
     try {
+      // Order matters: a block whose key is gone has to leave before the file
+      // is written, or omp reads it, fails validation, and drops every custom
+      // provider in it — the user's own included.
+      await this.pruneShippedProviders(configured);
       await syncCustomProviders(customProviders);
     } catch (err) {
       this.output.appendLine(
@@ -734,7 +1124,9 @@ export class OmpSession implements vscode.Disposable {
       this.turnStartedAt = 0;
       this.uiPendingIds.clear();
       this.uiPendingFrames.clear();
+      this.resetSubagents();
       this.abandonRoutedTurn();
+      this.hostToolsDown("agent exited");
       OmpSession.notifyBoard();
       const detail = `agent exited (code ${code ?? "?"}${signal ? `, signal ${signal}` : ""})`;
       this.initReject?.(new Error(detail));
@@ -784,7 +1176,9 @@ export class OmpSession implements vscode.Disposable {
       this.turnStartedAt = 0;
       this.uiPendingIds.clear();
       this.uiPendingFrames.clear();
+      this.resetSubagents();
       this.abandonRoutedTurn();
+      this.hostToolsDown("agent process error");
       OmpSession.notifyBoard();
       const isEnoent = err.code === "ENOENT";
       const detail = isEnoent
@@ -852,6 +1246,21 @@ export class OmpSession implements vscode.Disposable {
     } else if (frame.type === "tool_execution_end") {
       void this.finishToolSnapshot(frame);
     }
+    if (frame.type === "host_tool_call" || frame.type === "host_tool_cancel") {
+      // Answered by the bridge over stdin, never by the webview. Forwarding
+      // the raw frame would make the chat render an unknown event; the
+      // `hostTool` message below is the readable form of the same thing.
+      this.handleHostToolFrame(frame);
+      return;
+    }
+    if (isSubagentFrame(frame)) {
+      this.handleSubagentFrame(frame);
+      // Progress and raw child events are coalesced into `t:"subagents"`;
+      // only lifecycle carries on to the webview as a frame.
+      if (frame.type !== "subagent_lifecycle") {
+        return;
+      }
+    }
     // Forward ALL non-response frames to the webview.
     this.post({ t: "frame", frame });
     if (frame.type === "extension_ui_request") {
@@ -907,6 +1316,157 @@ export class OmpSession implements vscode.Disposable {
     }
   }
 
+  // ---------------------------------------------------------- host tools
+
+  /** Route one `host_tool_*` frame to the bridge and echo it into the chat. */
+  private handleHostToolFrame(frame: OmpFrame): void {
+    const id = typeof frame.id === "string" ? frame.id : "";
+    if (!id) {
+      this.output.appendLine(`[omp] ${String(frame.type)} without an id — ignored`);
+      return;
+    }
+    const bridge = this.hostToolBridge;
+    if (!bridge) {
+      // Only reachable if omp remembers tools this session never registered.
+      this.output.appendLine(`[omp] ${String(frame.type)} arrived with no host tool bridge`);
+      return;
+    }
+    if (frame.type === "host_tool_cancel") {
+      const targetId = typeof frame.targetId === "string" ? frame.targetId : "";
+      if (!targetId) {
+        return;
+      }
+      this.output.appendLine(`[omp] host tool cancel → ${targetId}`);
+      bridge.handleCancel({ id, targetId });
+      return;
+    }
+    const toolName = typeof frame.toolName === "string" ? frame.toolName : "";
+    const toolCallId = typeof frame.toolCallId === "string" ? frame.toolCallId : id;
+    const args =
+      frame.arguments && typeof frame.arguments === "object" && !Array.isArray(frame.arguments)
+        ? (frame.arguments as Record<string, unknown>)
+        : {};
+    this.hostToolCalls.set(id, toolName);
+    this.output.appendLine(`[omp] host tool call ${toolName} (${id})`);
+    this.post({
+      t: "hostTool",
+      phase: "call",
+      name: toolName,
+      id,
+      summary: OmpSession.hostToolArgSummary(args),
+    });
+    // Deliberately not awaited: omp fires several calls in one turn and they
+    // have to run at the same time.
+    bridge.handleCall({ id, toolCallId, toolName, arguments: args });
+  }
+
+  /** One-line preview of a tool's arguments for the chat row. */
+  private static hostToolArgSummary(args: Record<string, unknown>): string {
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(args)) {
+      let text: string;
+      if (typeof value === "string") {
+        text = value;
+      } else if (Array.isArray(value)) {
+        text = value.map((item) => String(item)).join(", ");
+      } else if (value === null || value === undefined) {
+        continue;
+      } else if (typeof value === "object") {
+        text = JSON.stringify(value);
+      } else {
+        text = String(value);
+      }
+      text = text.replace(/\s+/g, " ").trim();
+      if (!text) continue;
+      parts.push(`${key}: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
+    }
+    const summary = parts.join(" · ");
+    return summary.length > 200 ? `${summary.slice(0, 200)}…` : summary;
+  }
+
+  /**
+   * Watch frames on their way to the agent so a finished call reaches the
+   * chat. The bridge owns the result; the session only reports it.
+   */
+  private noteHostToolResult(frame: Record<string, unknown>): void {
+    if (frame.type !== "host_tool_result") {
+      return;
+    }
+    const id = typeof frame.id === "string" ? frame.id : "";
+    if (!id) return;
+    const name = this.hostToolCalls.get(id) ?? "";
+    this.hostToolCalls.delete(id);
+    const isError = frame.isError === true;
+    this.output.appendLine(`[omp] host tool ${isError ? "failed" : "done"} ${name} (${id})`);
+    this.post({
+      t: "hostTool",
+      phase: "result",
+      name,
+      id,
+      isError,
+      summary: OmpSession.hostToolResultSummary(frame.result),
+    });
+  }
+
+  /** First text block of an AgentToolResult, clipped for a chat row. */
+  private static hostToolResultSummary(result: unknown): string {
+    if (!result || typeof result !== "object") return "";
+    const content = (result as Record<string, unknown>).content;
+    if (!Array.isArray(content)) return "";
+    for (const block of content) {
+      if (block && typeof block === "object") {
+        const text = (block as Record<string, unknown>).text;
+        if (typeof text === "string" && text.trim()) {
+          const flat = text.replace(/\s+/g, " ").trim();
+          return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
+        }
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Announce the orchestration tools to a freshly negotiated agent.
+   *
+   * A failure here is a degradation, not a fault: the chat keeps working, it
+   * just cannot drive workspaces, and the reason belongs in the log where the
+   * missing tools will be explained.
+   */
+  private async registerHostTools(proc: OmpProcess): Promise<void> {
+    const bridge = this.hostToolBridge;
+    if (!bridge || this.hostToolDefs.length === 0 || !this.orchestrates) {
+      return;
+    }
+    if (!vscode.workspace.getConfiguration("ompcode").get<boolean>("orchestratorTools", true)) {
+      return;
+    }
+    try {
+      const data = await proc.request({ type: "set_host_tools", tools: this.hostToolDefs });
+      const names = this.extractList(data, "toolNames")
+        .map((name) => String(name))
+        .join(", ");
+      this.output.appendLine(`[omp] host tools registered: ${names || "(none reported)"}`);
+    } catch (err) {
+      this.output.appendLine(
+        `[omp] set_host_tools failed — workspace orchestration is unavailable: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** The agent that could answer host tool calls is gone; settle them all. */
+  private hostToolsDown(reason: string): void {
+    // The bridge first: its own error results travel back through
+    // `sendHostToolFrame`, which draws the chat row and forgets the call. Only
+    // what it leaves behind — or everything, when there is no bridge — is
+    // closed out by hand, so no call is reported twice.
+    this.hostToolBridge?.abortAll(reason);
+    for (const [id, name] of this.hostToolCalls) {
+      this.post({ t: "hostTool", phase: "result", name, id, isError: true, summary: reason });
+    }
+    this.hostToolCalls.clear();
+  }
+
   private async initialize(proc: OmpProcess): Promise<void> {
     try {
       await proc.request({ type: "negotiate_protocol", protocolVersion: 2 });
@@ -923,31 +1483,14 @@ export class OmpSession implements vscode.Disposable {
       ]);
       const models = this.extractList(modelsData, "models");
       const commands = this.extractList(commandsData, "commands");
+      await this.subscribeSubagents(proc);
       if (typeof (stateInit as Record<string, unknown>)?.isStreaming === "boolean") {
         this.streaming = (stateInit as Record<string, unknown>).isStreaming as boolean;
         this.turnPendingOrActive = this.streaming;
       }
 
       const cfg = vscode.workspace.getConfiguration("ompcode");
-      const defaultModel = (cfg.get<string>("defaultModel", "") ?? "").trim();
-      if (defaultModel) {
-        const slash = defaultModel.indexOf("/");
-        if (slash > 0 && slash < defaultModel.length - 1) {
-          const provider = defaultModel.slice(0, slash);
-          const modelId = defaultModel.slice(slash + 1);
-          try {
-            await proc.request({ type: "set_model", provider, modelId });
-          } catch (err) {
-            this.output.appendLine(
-              `[omp] set_model "${defaultModel}" failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        } else {
-          this.output.appendLine(
-            `[omp] ompcode.defaultModel "${defaultModel}" is not "provider/modelId" — skipped`,
-          );
-        }
-      }
+      await this.applyConfiguredModel(proc);
 
       const level = cfg.get<string>("thinkingLevel", "auto");
       try {
@@ -956,6 +1499,17 @@ export class OmpSession implements vscode.Disposable {
         this.output.appendLine(
           `[omp] set_thinking_level "${level}" failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+
+      // Before any prompt can arrive: a turn that starts without the tools
+      // registered would answer as if workspaces did not exist.
+      await this.registerHostTools(proc);
+
+      const resumedOverride = await this.resumeOverrideSession(proc);
+      if (resumedOverride) {
+        // `switch_session` restores the model recorded in that JSONL, which
+        // would silently drop the workspace's pin on every reopen.
+        await this.applyConfiguredModel(proc);
       }
 
       if (this.proc !== proc) {
@@ -988,7 +1542,9 @@ export class OmpSession implements vscode.Disposable {
       this.turnPendingOrActive = false;
       this.uiPendingIds.clear();
       this.uiPendingFrames.clear();
+      this.resetSubagents();
       this.abandonRoutedTurn();
+      this.hostToolsDown("handshake failed");
       this.initReject?.(new Error(`init failed: ${message}`));
       this.output.appendLine(`[omp] init failed: ${message}`);
       this.post({ t: "proc", status: "error", detail: `init failed: ${message}` });
@@ -1008,7 +1564,9 @@ export class OmpSession implements vscode.Disposable {
           this.post({
             t: "boot",
             cfg: {
-              defaultModel: cfg.get<string>("defaultModel", ""),
+              // The session's own model, not the window's: a workspace chat
+              // runs on a pinned one and its chip must say so.
+              defaultModel: this.configuredModel(),
               thinkingLevel: cfg.get<string>("thinkingLevel", "auto"),
               approvalMode: this.approvalSetting().mode,
               theme: OmpSession.themeId(cfg.get<string>("theme", "violet")),
@@ -1102,6 +1660,7 @@ export class OmpSession implements vscode.Disposable {
               await this.initDone;
             }
             await this.request({ type: "set_model", provider, modelId });
+            this.pinModel(provider, modelId);
             await this.pushState();
           });
           return;
@@ -1114,6 +1673,23 @@ export class OmpSession implements vscode.Disposable {
           // Approval is a spawn argument, so it can only change by restarting.
           const mode = typeof msg.mode === "string" ? msg.mode : "";
           if (!(APPROVAL_MODES as readonly string[]).includes(mode)) {
+            return;
+          }
+          if (!this.usesSetting("approvalMode")) {
+            // A pinned tier belongs to the workspace record, not to settings:
+            // writing the window setting here would restart every *other*
+            // session onto a tier this one would go on ignoring. So the pin
+            // itself moves, and only this session restarts — approval is a
+            // spawn argument, so nothing else can apply it.
+            const pinned = mode as ApprovalMode;
+            if (this.overrides.approvalMode === pinned) {
+              return;
+            }
+            this.overrides.approvalMode = pinned;
+            this.overrides.onApprovalMode?.(pinned);
+            this.output.appendLine(`[omp] workspace approval tier is now "${pinned}" — restarting`);
+            this.pushApproval();
+            await this.restart();
             return;
           }
           // Write into whichever scope is actually in effect: a Workspace
@@ -1412,6 +1988,8 @@ export class OmpSession implements vscode.Disposable {
    * `state.sessionFile`, and `switch_session` takes exactly that.
    */
   private lastSessionFile: string | undefined;
+  /** Guards the one-shot reattach to `overrides.sessionFile`; see resumeOverrideSession. */
+  private overrideResumeAttempted = false;
   /** Profile of the model currently selected, or undefined before the first state. */
   private activeProfile: ResolvedProfile | undefined;
 
@@ -1833,10 +2411,77 @@ export class OmpSession implements vscode.Disposable {
     return result;
   }
 
+  /**
+   * Claim a turn that is about to be sent but has not been dispatched yet, and
+   * return the release for it.
+   *
+   * For fire-and-forget sends only — the opening prompt of a new workspace,
+   * which is handed over while the agent is still handshaking. Between that
+   * hand-off and the `prompt` request the session would otherwise snapshot as
+   * plain "idle", and an orchestrator waiting on the worker it just created
+   * would take that for "finished" and read an empty diff. Release it when the
+   * send settles either way; a leaked mark leaves the row busy forever.
+   *
+   * Deliberately not `turnPendingOrActive`: that flag also decides whether the
+   * next send is treated as a steer, and pre-setting it would turn the very
+   * prompt it is guarding into a steer into a turn that does not exist.
+   */
+  markTurnPending(): () => void {
+    this.queuedSends += 1;
+    OmpSession.notifyBoard();
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.queuedSends = Math.max(0, this.queuedSends - 1);
+      OmpSession.notifyBoard();
+    };
+  }
+
+  /**
+   * Send a prompt the user did not type — a workspace's opening instruction, a
+   * steer from the orchestrating chat, a follow-up queued behind a live turn.
+   *
+   * Routes through the same `promptOnce` the composer uses, so queueing,
+   * steering and the routed-model transaction stay in one place. Failures are
+   * thrown rather than shown as a chat error: the caller is a tool whose model
+   * has to be told what went wrong.
+   */
+  async sendPrompt(
+    message: string,
+    mode: "prompt" | "steer" | "follow_up" = "prompt",
+  ): Promise<void> {
+    const text = message.trim();
+    if (!text) {
+      throw new Error("prompt is empty");
+    }
+    await this.promptOnce(text, undefined, false, mode);
+  }
+
+  /**
+   * The agent's last reply as plain text, or undefined when it has not spoken
+   * yet. Used for the one-line "what is this workspace saying" column.
+   */
+  async lastAssistantText(): Promise<string | undefined> {
+    // Never as a side effect: this is a status read (the orchestrator calls it
+    // for every workspace on every wait), and `ensureStarted` would respawn an
+    // agent the user or a crash had stopped just to answer it.
+    if (!this.proc?.running || !this.initialized) {
+      return undefined;
+    }
+    const data = await this.request({ type: "get_last_assistant_text" });
+    const text =
+      data && typeof data === "object" ? (data as Record<string, unknown>).text : undefined;
+    return typeof text === "string" && text.trim() ? text : undefined;
+  }
+
   private async promptOnce(
     message: string,
     forModel?: { provider: string; modelId: string },
     reportFailure = true,
+    mode: "prompt" | "steer" | "follow_up" = "prompt",
   ): Promise<void> {
     // Whether this send landed on a live turn. A failed steer must not make
     // the webview tear down a turn that is still running.
@@ -1860,14 +2505,30 @@ export class OmpSession implements vscode.Disposable {
         }
 
         if (!forModel) {
+          // A turn was already running when this send started. Left as the
+          // sole source of truth for the failure path below: only a send that
+          // began on an idle session may clear the turn flag again.
           const steering = this.turnPendingOrActive || this.streaming;
-          steer = steering;
+          // `mode` is what a caller asserts, `steering` what the session
+          // believes; an explicit mode wins because the orchestrator knows why
+          // it is writing into a running turn. omp spells the queued form
+          // "followUp" — the host tool takes the snake_case name the model
+          // writes, and this is the one place they meet.
+          const behavior =
+            mode === "steer"
+              ? "steer"
+              : mode === "follow_up"
+                ? "followUp"
+                : steering
+                  ? "steer"
+                  : undefined;
+          steer = steering || behavior === "steer";
           this.turnPendingOrActive = true;
           try {
             await proc.request({
               type: "prompt",
               message,
-              streamingBehavior: steering ? "steer" : undefined,
+              streamingBehavior: behavior,
             });
           } catch (err) {
             // State frames lag the agent, so omp may have started streaming
@@ -2222,7 +2883,7 @@ export class OmpSession implements vscode.Disposable {
       approvalMode: this.approvalSetting().mode,
       profile: this.activeProfile ?? null,
       configuration: {
-        defaultModel: cfg.get<string>("defaultModel", ""),
+        defaultModel: this.configuredModel(),
         thinkingLevel: cfg.get<string>("thinkingLevel", "auto"),
         theme: OmpSession.themeId(cfg.get<string>("theme", "violet")),
       },
@@ -2267,6 +2928,11 @@ export class OmpSession implements vscode.Disposable {
             provider: command.payload.provider,
             modelId: command.payload.modelId,
           });
+          // The same pin the panel's picker sets. Without it a model chosen
+          // from the phone lived only in the running process: the next restart
+          // — or a window reload, which restores from the tab record — put the
+          // session back on `ompcode.defaultModel`.
+          this.pinModel(command.payload.provider, command.payload.modelId);
           await this.pushState();
         });
         return { changed: true };
@@ -2637,6 +3303,45 @@ export class OmpSession implements vscode.Disposable {
    * stored secret keeps whatever `apiKey` (if any) the settings.json entry
    * declared, so the plaintext path still works as a fallback.
    */
+  /**
+   * Add each shipped provider block (CONFIG_PROVIDERS) whose key is stored.
+   *
+   * A `ompcode.customProviders` entry of the same name wins outright: that
+   * file is the user's, and a shipped default has no business overruling it.
+   */
+  private async withShippedProviders(
+    configured: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const out: Record<string, unknown> = { ...configured };
+    for (const entry of CONFIG_PROVIDERS) {
+      if (entry.name in out || !(await this.context.secrets.get(entry.secret))) {
+        continue;
+      }
+      out[entry.name] = entry.def;
+    }
+    return out;
+  }
+
+  /**
+   * Take back a shipped block once its key is cleared. Blocks the user has
+   * since adopted under the same name in settings.json are left alone, as is
+   * anything pointing somewhere other than the endpoint this extension writes.
+   */
+  private async pruneShippedProviders(configured: Record<string, unknown>): Promise<void> {
+    for (const entry of CONFIG_PROVIDERS) {
+      if (entry.name in configured || (await this.context.secrets.get(entry.secret))) {
+        continue;
+      }
+      const baseUrl = entry.def.baseUrl;
+      if (typeof baseUrl !== "string") {
+        continue;
+      }
+      if (await pruneCustomProvider(entry.name, baseUrl)) {
+        this.output.appendLine(`[omp] removed models.yml provider "${entry.name}" — key cleared`);
+      }
+    }
+  }
+
   private async injectProviderKeys(
     cfg: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
@@ -2660,8 +3365,16 @@ export class OmpSession implements vscode.Disposable {
    * `ompcode.approvalMode` is window-scoped, so a Workspace or Folder value
    * beats a Global one. Writing blindly to Global would leave the chip
    * showing a tier the agent was never launched with.
+   *
+   * A session that pinned its own tier answers with that instead. Its target is
+   * nominal: the pin lives in the workspace record, not in configuration, so
+   * nothing is ever written back through it.
    */
   private approvalSetting(): { mode: ApprovalMode; target: vscode.ConfigurationTarget } {
+    const pinned = this.overrides.approvalMode;
+    if (pinned && (APPROVAL_MODES as readonly string[]).includes(pinned)) {
+      return { mode: pinned, target: vscode.ConfigurationTarget.Global };
+    }
     const cfg = vscode.workspace.getConfiguration("ompcode");
     const info = cfg.inspect<string>("approvalMode");
     const target =
@@ -2883,6 +3596,142 @@ export class OmpSession implements vscode.Disposable {
     this.post({ t: "commands", commands: this.extractList(data, "commands") });
   }
 
+  /**
+   * Ask omp to report the subagents it spawns. Levels come from
+   * `ompcode.subagentSubscription`: `progress` (status, cost, current tool) is
+   * the default, `events` adds the child's raw event stream, `off` stays quiet.
+   *
+   * A failure here is a degradation, never a fatal: omp builds older than
+   * 15.10.12 do not know the command, and the rest of the session works fine
+   * without a subagent panel.
+   */
+  private async subscribeSubagents(proc: OmpProcess): Promise<void> {
+    const level = vscode.workspace
+      .getConfiguration("ompcode")
+      .get<string>("subagentSubscription", "progress");
+    if (level === "off") {
+      return;
+    }
+    try {
+      await proc.request({ type: "set_subagent_subscription", level });
+    } catch (err) {
+      this.output.appendLine(
+        `[omp] subagent subscription unavailable (${level}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    // A restart reattaches to a conversation whose subagents were announced
+    // before this process existed; the running ones come back only by asking.
+    try {
+      const running = await proc.request({ type: "get_subagents" });
+      if (this.proc !== proc) {
+        return;
+      }
+      const merged = reduceSubagentList(this.subagentState, running, Date.now());
+      if (merged !== this.subagentState) {
+        this.subagentState = merged;
+        this.flushSubagents();
+      }
+    } catch (err) {
+      this.output.appendLine(`[omp] get_subagents failed: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Fold one subagent frame into state. Lifecycle changes are rare and worth
+   * showing at once; progress frames arrive dozens of times a second per agent
+   * and are coalesced, because `post()` also mirrors every message to a paired
+   * Remote Control device.
+   */
+  private handleSubagentFrame(frame: OmpFrame): void {
+    const next = reduceSubagentFrame(this.subagentState, frame, Date.now());
+    if (!next) {
+      return;
+    }
+    const changed = next !== this.subagentState;
+    this.subagentState = next;
+    if (frame.type === "subagent_lifecycle") {
+      this.flushSubagents();
+      OmpSession.notifyBoard();
+      return;
+    }
+    if (changed) {
+      this.noteSubagentProgress();
+    }
+  }
+
+  /** Trailing-edge throttle: at most one snapshot per window, last state wins. */
+  private noteSubagentProgress(): void {
+    if (this.subagentFlushTimer) {
+      this.subagentDirty = true;
+      return;
+    }
+    this.flushSubagents();
+    this.subagentFlushTimer = setTimeout(() => {
+      this.subagentFlushTimer = undefined;
+      if (this.subagentDirty) {
+        this.subagentDirty = false;
+        this.noteSubagentProgress();
+      }
+    }, SUBAGENT_FLUSH_MS);
+  }
+
+  /** Push the current roster to the webview and the board. */
+  private flushSubagents(): void {
+    this.post({ t: "subagents", snapshot: subagentSnapshot(this.subagentState) });
+    OmpSession.notifyBoard();
+  }
+
+  /** Drop the roster and any pending flush — subagents never outlive a process. */
+  private resetSubagents(): void {
+    if (this.subagentFlushTimer) {
+      clearTimeout(this.subagentFlushTimer);
+      this.subagentFlushTimer = undefined;
+    }
+    this.subagentDirty = false;
+    if (this.subagentState.size > 0) {
+      this.subagentState = new Map();
+      this.post({ t: "subagents", snapshot: { subagents: [], running: 0 } });
+    }
+  }
+
+  /**
+   * The subagent's own transcript, read from its JSONL by byte offset. omp
+   * answers with `entries` (raw file records) and `messages` (parsed); the raw
+   * records are what a reader wants when diagnosing a run, so they win when
+   * both are present.
+   */
+  async subagentTranscript(id: string): Promise<string> {
+    const info = this.subagentState.get(id);
+    if (!info) {
+      throw new Error(t("No transcript available for this subagent"));
+    }
+    const request: Record<string, unknown> = { type: "get_subagent_messages", fromByte: 0 };
+    // omp accepts either selector; the id is the stable one, the session file
+    // is the fallback for a record that arrived without one.
+    if (info.id) {
+      request.subagentId = info.id;
+    } else if (info.sessionFile) {
+      request.sessionFile = info.sessionFile;
+    } else {
+      throw new Error(t("No transcript available for this subagent"));
+    }
+
+    const response = await this.request(request as never);
+    const data =
+      response && typeof response === "object"
+        ? ((response as Record<string, unknown>).data ?? response)
+        : {};
+    const entries = this.extractList(data, "entries");
+    const lines = entries.length > 0 ? entries : this.extractList(data, "messages");
+    if (lines.length === 0) {
+      throw new Error(t("No transcript available for this subagent"));
+    }
+    return lines
+      .map((line) => (typeof line === "string" ? line : JSON.stringify(line)))
+      .join("\n");
+  }
+
   private extractList(data: unknown, key: string): unknown[] {
     if (Array.isArray(data)) {
       return data;
@@ -2958,6 +3807,15 @@ export class OmpSession implements vscode.Disposable {
     // keep a {0} placeholder and have it filled in after escaping.
     // `<` is escaped so a translation can never close this script tag early.
     const bundle = JSON.stringify(currentBundle()).replace(/</g, "\\u003c");
+    // The tab id has to reach the renderer inside the markup rather than as a
+    // message: `setState` must run before the user can reload the window, and
+    // a posted message can be dropped while the webview is still loading.
+    // Stamped on #app — <body> carries the palette and nothing else — so the
+    // renderer can store it with `setState` the moment it loads. A message
+    // would race the user reloading the window; the markup cannot.
+    const tabId = this.overrides.tabId
+      ? ` data-tab-id="${esc(this.overrides.tabId)}"`
+      : "";
     const welcome = esc(
       t(
         "Ask questions, run commands, edit files. Type {0} for commands. Attach files with 📎, Ctrl/Cmd+V, or Shift+drag. Shift+Enter for a new line, Esc to interrupt.",
@@ -2974,7 +3832,7 @@ export class OmpSession implements vscode.Disposable {
 <title>OMP Code</title>
 </head>
 <body data-theme="${theme}">
-<div id="app">
+<div id="app"${tabId}>
   <header class="topbar">
     <div class="topbar-title"><span class="spark">✳</span><span id="session-title">OMP Code</span></div>
     <div class="topbar-actions">

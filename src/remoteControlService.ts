@@ -1940,7 +1940,9 @@ export class RemoteControlService implements vscode.Disposable {
       providers: KEYED_PROVIDERS.map((provider) => ({
         id: provider.id,
         label: provider.label,
-        envVar: provider.envVar,
+        // Absent for providers keyed through models.yml — the phone renders the
+        // label alone rather than naming a variable nothing reads.
+        ...(provider.envVar === undefined ? {} : { envVar: provider.envVar }),
         placeholder: provider.placeholder,
       })),
     };

@@ -6,6 +6,200 @@ All notable changes to OMP Code. Versions follow [semantic versioning](https://s
 
 ### Added
 
+- **Every workspace gets its own terminal, and the board shows whose server
+  is whose.** `Open Terminal` on a workspace row now opens a terminal pinned
+  to its worktree — branch icon, `OMPCODE_WORKSPACE_ID` in the environment —
+  and pressing it again brings the same terminal back instead of stacking
+  shells. `Run Configured Commands` executes the `run` list from
+  `.ompcode/workspace.json` there: everything before the last command is a
+  prep step whose failure stops the run, the last one is the dev-server slot
+  and is left running. A port scanner walks each workspace's process tree
+  and puts what it finds on the row — three agents, three dev servers, and
+  `⇡ 3000` says which is whose. The globe action opens the port through
+  `asExternalUri`, so it lands on the right machine under Remote-SSH too.
+  Scanning idles down to a 30-second cadence when nothing changes and wakes
+  back up the moment a terminal opens or closes; `ompcode.portScan` turns it
+  off, `ompcode.portScanIgnore` (default `[22, 80, 443]`) names the ambient
+  listeners it should never show.
+- **The chat runs the workspaces itself.** The main chat now holds the same
+  workspace controls the operator has — create one on a named model, prompt it,
+  wait for it, read its diff, merge the one that won, delete the rest — as
+  tools it can call. One sentence is the whole instruction: "try this on GLM
+  and on Sonnet, then show me both diffs" cuts two worktrees, starts two
+  agents, waits for both, and comes back with the diffs. What the model creates
+  is an ordinary workspace: the same rows appear on the `Sessions` board and in
+  `Review`, with the same merge behind them, so anything the agent starts can
+  be taken over by hand at any point. `workspace_wait` really does wait —
+  several calls run at once, and cancelling the turn cancels them — so a chat
+  sitting quiet for ten minutes is the agent watching its workers, not a
+  stalled one.
+- Only a top-level chat gets those tools. A workspace's own agent never does,
+  whatever `ompcode.orchestratorTools` says: a worker that could create workers
+  would fork worktrees until the disk filled.
+- `OMP Code: Workspace Orchestration Status` prints what the chat sees —
+  every workspace with its branch, model, state, cost and churn — into the
+  `OMP Code` output channel, so "the model says it is still working" and "the
+  board says it went idle" can be told apart.
+- `ompcode.orchestratorTools` turns the whole thing off; workspaces then stay
+  something you drive by hand from the `Sessions` view. The tool list is
+  declared once at agent startup, so changing it restarts the running agents.
+- **An operating manual for the chat that runs the workspaces.** Having the
+  tools is not the same as using them well: the failure that costs a whole
+  unattended night is two workers editing one file, or a worker left standing
+  in `asks` because nobody answered it. `OMP Code: Install the Orchestrator
+  Instruction` writes that manual into the repository as
+  `.omp/agents/orchestrator.md` — how to split files between workers so their
+  branches still merge, what belongs in a prompt an agent reads with none of
+  your conversation in front of it, which model class each kind of task is
+  worth, why a long `workspace_wait` is progress and not a hang, and what to
+  read before merging. It is a copy, meant to be edited: trim the model
+  routing, add the project's own conventions, and the next extension update
+  will not overwrite it. Since only a top-level chat has the workspace tools,
+  the command also hands you the one line to put in `AGENTS.md` that points
+  the main chat at the file.
+- `ompcode.orchestratorMaxWorkspaces` (default 5) caps how many workspaces may
+  exist at once. Each one is a full checkout on disk and a metered agent in
+  memory, and a model that starts workers faster than it finishes them should
+  meet a limit that names itself rather than a full disk. The ceiling is
+  counted one create at a time, so three `workspace_create` calls fired in the
+  same turn cannot all read "four of five" and all pass. Changing the number
+  no longer restarts the running agents — it is the natural thing to do right
+  after a create was refused, and killing five live turns to make room for a
+  sixth is not a trade anyone would take.
+- **The workspace tools are safe to hand an unattended model.**
+  `workspace_verify` runs only what the repository itself declares — the
+  `verify` list in `.ompcode/workspace.json`, else a `test`/`check`/`build`
+  script — or one npm script named by the model; there is no free-form
+  command, so nothing the model composes reaches a shell. A workspace it
+  creates defaults to the unattended approval tier rather than the window's,
+  because a worker nobody is watching cannot answer a modal and would deadlock
+  on its first edit; and if one does stop on an approval dialog, the tools now
+  say plainly that a human has to clear it instead of sending the model to
+  prompt at a worker that cannot hear it. `workspace_delete` refuses an agent
+  that is still mid-turn unless forced — a worker that started slower is
+  `ahead: 0` on a clean worktree, and git cannot tell it apart from an empty
+  leftover. A `workspace_verify` that hangs is now always killed and always
+  answers: the tree gets SIGTERM, then SIGKILL, then a hard deadline that
+  reports the timeout even when a survivor is still holding the output pipes.
+- A workspace that has been asked something but has not started streaming yet
+  reads as `working`, not `idle`. `workspace_wait` on a freshly created
+  workspace used to settle in that gap and report a worker "done" with nothing
+  on disk.
+
+### Fixed
+
+- **Reloading the window no longer closes every chat.** `Developer: Reload
+  Window` used to take the chat tabs with it: they are webview panels, and VS
+  Code discards a persisted panel unless something claims its view type. A
+  serializer now claims `ompcode.chatTab`, and the tab comes back as it was —
+  the same folder, the same model the tab was pinned to, and, through
+  `switch_session`, the same conversation rather than a blank one. A workspace
+  tab is rebound to its workspace record, so its branch, model and approval tier
+  return with it. Each tab keeps only an id in its webview state; the rest lives
+  in `workspaceState` beside the workspaces. A tab whose workspace was deleted
+  while the window was down is not resurrected in a directory that no longer
+  exists — it says so and closes.
+
+## [0.14.0] — 2026-08-31
+
+### Added
+
+- **Review: see what each agent wrote, merge the one that won, delete the rest.**
+  Three agents on three models in three worktrees produce three branches, and
+  until now the only way to compare them was three terminals and a lot of
+  `git diff`. A new `Review` view lists every workspace with the size of what it
+  changed — `⎇ omp/glm · +412 −38 · 17 files` — and expands into its changed
+  files, new and uncommitted ones included: a file the agent created but never
+  committed is invisible to plain `git diff`, and the count here goes looking
+  for it instead of silently reporting zero. Nothing in the agent's worktree is
+  touched to find out — no `git add -N`, which would write to the index of a
+  checkout an agent is working in right now. Every diff is taken against the
+  commit the workspace was cut from, so two workspaces created an hour apart
+  stay comparable even as the base branch moves. Clicking a file opens a normal
+  side-by-side diff against that base commit, read-only on the left; a workspace
+  row opens all of its files as one multi-file diff. Counting is lazy and
+  cached — a workspace is only measured once you expand it, then recounted when
+  its worktree actually changes, debounced so an agent mid-edit cannot spawn git
+  faster than it finishes. `ompcode.reviewAutoRefresh` turns the watching off on
+  a repository big enough to care.
+- **Merging a workspace, without the parts that lose work.** `Merge workspace`
+  asks for a merge commit or a squash, then checks whether the branch can land
+  before it changes anything: whether the two sides conflict (asked of git
+  directly, in a scratch index — no test merge in your checkout, no grepping
+  files for `<<<<<<<`), whether the main checkout is dirty, whether the base has
+  moved since the workspace was cut, whether the worktree still holds
+  uncommitted work. Blockers are shown as a list of what is in the way and what
+  the merge would do about it, and `Merge anyway` is offered only for the ones
+  that can be worked around — never for a conflict. The merge itself commits the
+  worktree's loose changes to its own branch first (otherwise they simply would
+  not be merged), stashes and restores anything uncommitted in the main
+  checkout, and refuses to rewrite the base branch's history: a squash lands
+  through `merge --ff-only`, and a rebase that hits a conflict is aborted, not
+  left half-applied. On success it offers to delete the workspace that won and
+  the ones that lost — `Delete the other workspaces` clears the rest of the race
+  in one confirmation. A single file can be rewound to the base on its own,
+  which is how a mostly-good branch gets merged without the one file the agent
+  ruined. The main checkout is put back on the branch it was standing on when
+  you started, and the stash is restored onto *that* branch rather than onto
+  the base; whatever the merge did — a worktree committed, a stash still held,
+  a merge that could not be aborted — is named in the notification instead of
+  being flattened into "done"; cancelling the progress notification stops the
+  merge without cancelling its own cleanup; a worktree that is not standing on
+  its branch is refused rather than committed to a dangling commit; and
+  discarding a renamed file brings the old name back, which is what the dialog
+  promises.
+- **Workspaces: every agent gets its own checkout.** Two agents told to work at
+  once in the same folder overwrite each other's edits, fight over the build
+  output and leave a `git status` nobody can read. A workspace is a git worktree
+  plus its own branch plus its own omp process: `New Workspace` asks for a name,
+  a base branch, a model and an approval mode, cuts `omp/<name>` from the base,
+  drops the worktree in `<repo parent>/<repo name>.worktrees/` — outside the
+  repository, so watchers and builds in the main checkout never see it — and
+  opens a chat already pointed at that folder. The base commit is pinned at
+  creation, so a diff stays a diff even after the base branch moves on.
+  Model and approval mode are per workspace, not per window: one workspace can
+  run a cheap model with full shell access while another runs a careful one that
+  asks before every write, and changing the global setting no longer restarts
+  the sessions that overrode it. The session board grows a `Workspaces` group
+  above `Chats`, each row showing its branch, model, status and cost, with the
+  session's subagents underneath; rows carry reveal, terminal and delete
+  buttons, and delete says what it is about to throw away — uncommitted files,
+  commits that exist nowhere else — before it removes the worktree. Workspaces
+  survive a VS Code restart: the record remembers the last session file and
+  reopening resumes that conversation. Records whose worktree was removed
+  outside the extension are reconciled against git and dropped.
+- **Setup scripts, so a fresh worktree can actually run.** A new worktree has no
+  `node_modules`, no `.env` and no build output, so the agent would start in a
+  project that does not build. `.ompcode/workspace.json` declares `setup`,
+  `teardown` and `run` command lists; a repository that already carries
+  `.superset/config.json` is read as-is, the schema is the same. Commands run in
+  a terminal in the worktree through shell integration, so their exit code is
+  known rather than guessed, and `.ompcode/workspace.local.json` adds `before`
+  and `after` hooks that stay out of version control. `ompcode.workspaceSetup`
+  chooses whether that happens automatically, on confirmation, or never.
+
+- **Subagents are visible.** omp has always been able to fan a turn out across
+  subagents — each on its own model, sometimes its own provider — but the extension
+  dropped every frame that reported them, so a running fleet looked like one stalled
+  chat. The session board now hangs the subagents under their session with the model
+  each resolved to, the tool it is running, its cost and its token count, and the chat
+  draws the same rows inside the parent `task` card. A row opens that subagent's own
+  JSONL transcript. Progress arrives dozens of times a second per agent, so the host
+  coalesces it to at most four snapshots a second before it reaches the webview or a
+  paired phone; lifecycle changes are forwarded at once. Subagents run auto-approved
+  whatever the session's approval mode is, and the rows say so rather than leaving it
+  to be discovered. `ompcode.subagentSubscription` turns the stream down or off.
+
+- **GLM on a pay-as-you-go key, alongside the Coding Plan.** The GLM row the extension
+  already had is the Coding Plan subscription; this one is an open-platform key from
+  bigmodel.cn, billed per token against your balance. Both can be configured at once,
+  and the picker groups them separately with ten GLM models (4.5 through 5.3) priced
+  from omp's catalog. omp has no env var for the platform endpoint
+  (`open.bigmodel.cn/api/paas/v4`), so this key is written into
+  `~/.omp/agent/models.yml` at spawn and taken back out when it is cleared — a keyless
+  block fails validation, and omp answers that by disabling every custom provider in
+  the file.
+
 - **A settings window, instead of a settings menu.** The gear held accounts, keys,
   models, three Remote Control commands, five session actions and diagnostics in one
   dropdown. It opens a full-screen window now — the same window in VS Code and on the

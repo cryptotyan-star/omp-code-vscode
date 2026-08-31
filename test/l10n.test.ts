@@ -8,18 +8,37 @@ import { loadBundle, resolveLanguage, setBundle, t } from "../src/l10n.ts";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
+ * Every `.ts`/`.mjs` file under a directory, relative to the repo root.
+ * Recursive because translatable strings live in subdirectories too —
+ * `src/workspaces/` in particular — and a flat scan would silently declare
+ * them all translated.
+ */
+function walkFiles(relativeDir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(path.join(root, relativeDir), { withFileTypes: true })) {
+    const relative = path.join(relativeDir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walkFiles(relative));
+    } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".mjs")) {
+      out.push(relative);
+    }
+  }
+  return out;
+}
+
+/** Every file that may hold a `t("…")` call. */
+function translatableFiles(): string[] {
+  return [...walkFiles("src"), ...walkFiles("media")];
+}
+
+/**
  * Every translatable string is a `t("…")` call, so the source itself is the
  * key list. Scanning for them keeps the bundles honest: a string added
  * without a translation, or a translation left behind after its string was
  * deleted, both fail here rather than showing up in the UI.
  */
 function sourceKeys(): string[] {
-  const files = [
-    ...fs.readdirSync(path.join(root, "src")).map((f) => path.join("src", f)),
-    ...fs.readdirSync(path.join(root, "media")).map((f) => path.join("media", f)),
-  ].filter(
-    (f) => (f.endsWith(".ts") || f.endsWith(".mjs")) && !path.basename(f).startsWith("l10n."),
-  );
+  const files = translatableFiles().filter((f) => !path.basename(f).startsWith("l10n."));
   const call = /\bt\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g;
   const keys: string[] = [];
   for (const file of files) {
@@ -187,15 +206,12 @@ test("the translation function is never shadowed or read as an object", () => {
   // a missing property is not an error.
   const property = /(?<![\w.$])t\.[A-Za-z_]/;
   const declaration = /\b(?:var|let|const)\s+t\b|function\s+t\s*\(/;
-  const files = [
-    ...fs.readdirSync(path.join(root, "src")).map((f) => path.join("src", f)),
-    ...fs.readdirSync(path.join(root, "media")).map((f) => path.join("media", f)),
-  ].filter((f) => f.endsWith(".ts") || f.endsWith(".mjs"));
+  const files = translatableFiles();
 
   let scanned = 0;
   for (const file of files) {
     const text = fs.readFileSync(path.join(root, file), "utf8");
-    if (!text.includes('from "./l10n')) {
+    if (!/from "\.\.?\/l10n/.test(text)) {
       continue; // does not import t; a local `t` there is nobody's business
     }
     scanned++;

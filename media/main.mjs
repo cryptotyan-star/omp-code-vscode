@@ -11,6 +11,13 @@
 
   var hostPort = createHostPort(window);
   if (hostPort.kind === "android") document.body.setAttribute("data-platform", "android");
+  // A window reload throws this webview away; VS Code offers the panel back to
+  // the extension with nothing but the state stored here. The id names which
+  // chat this tab was (see src/chatTabs.ts) and is baked into the markup by
+  // getHtml, so it is stored now rather than waiting for a host message that a
+  // reload could beat. The sidebar view carries no id and is never restored.
+  var tabId = document.getElementById("app")?.getAttribute("data-tab-id");
+  if (tabId) hostPort.setState({ tabId: tabId });
   var remoteCapabilityVerbs = null;
 
   var REMOTE_UI_CAPABILITY = {
@@ -598,6 +605,152 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Subagents                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /* omp spawns subagents through a parent tool-call and then reports them on
+     two channels: rare `subagent_lifecycle` frames, forwarded as they happen,
+     and a `t:"subagents"` snapshot the host coalesces to at most 4 Hz because
+     a single subagent emits dozens of progress frames a second. Both land in
+     the same rows, so a start is visible immediately and the numbers catch up
+     on the next snapshot. */
+
+  var subagentRows = new Map();   // subagent id → row element
+  var subagentOrphansEl = null;   // holds rows whose parent tool-call is unknown
+
+  var SUBAGENT_STATUSES = { started: 1, completed: 1, failed: 1, aborted: 1 };
+
+  /** Present-and-usable test: an absent field must leave the rendered value alone. */
+  function subagentHas(v) {
+    return v !== undefined && v !== null && v !== "";
+  }
+
+  /** Rows live at the end of the transcript only while no parent card exists. */
+  function subagentOrphans() {
+    if (!subagentOrphansEl || !subagentOrphansEl.isConnected) {
+      subagentOrphansEl = document.createElement("div");
+      subagentOrphansEl.className = "subagent-list subagent-orphans";
+      appendToMessages(subagentOrphansEl);
+    }
+    return subagentOrphansEl;
+  }
+
+  /**
+   * Move `row` under its parent tool-call card, creating that card's list on
+   * first use. A row already placed is never demoted back to the orphan bin:
+   * a lifecycle frame can arrive before the tool-call card exists, and a later
+   * frame that simply omits parentToolCallId must not undo the reunion.
+   */
+  function placeSubagentRow(row, parentToolCallId) {
+    var card = subagentHas(parentToolCallId) ? byToolCallId.get(String(parentToolCallId)) : null;
+    if (card) {
+      var list = card.querySelector(".subagent-list");
+      if (!list) {
+        list = document.createElement("div");
+        list.className = "subagent-list";
+        card.appendChild(list);
+      }
+      if (row.parentNode !== list) list.appendChild(row);
+      return;
+    }
+    if (!row.parentNode) subagentOrphans().appendChild(row);
+  }
+
+  function ensureSubagentRow(id) {
+    var row = subagentRows.get(id);
+    if (row && row.isConnected) return row;
+    row = document.createElement("div");
+    row.className = "subagent-row";
+    row.setAttribute("data-sub-id", id);
+    row.setAttribute("data-status", "started");
+    // Static skeleton only. Every agent-controlled value below is written with
+    // textContent or via esc(), so nothing untrusted reaches innerHTML.
+    row.innerHTML =
+      '<span class="subagent-dot"></span>' +
+      '<span class="subagent-name"></span>' +
+      '<span class="subagent-badge subagent-model hidden"></span>' +
+      '<span class="subagent-badge subagent-auto" title="' +
+        esc(t("omp always runs subagents without approval prompts, whatever the session approval mode is.")) +
+        '">' + esc(t("auto-approved")) + '</span>' +
+      '<span class="subagent-tool"></span>' +
+      '<span class="subagent-cost"></span>' +
+      '<span class="subagent-tokens"></span>';
+    subagentRows.set(id, row);
+    return row;
+  }
+
+  /** Write one field, hiding its element while there is nothing to say. */
+  function setSubagentField(row, selector, text) {
+    var el = row.querySelector(selector);
+    if (!el) return;
+    text = String(text == null ? "" : text);
+    el.textContent = text;
+    if (text) el.classList.remove("hidden");
+    else el.classList.add("hidden");
+  }
+
+  /**
+   * Patch one row in place from a full or partial SubagentInfo. Rebuilding the
+   * row instead would restart the running dot's pulse animation several times
+   * a second, which reads as flicker rather than as progress.
+   */
+  function updateSubagentRow(info) {
+    if (!info || typeof info !== "object") return;
+    var id = subagentHas(info.id) ? String(info.id) : "";
+    if (!id) return;
+
+    var row = ensureSubagentRow(id);
+    placeSubagentRow(row, info.parentToolCallId);
+
+    var status = String(info.status);
+    if (Object.prototype.hasOwnProperty.call(SUBAGENT_STATUSES, status)) {
+      row.setAttribute("data-status", status);
+    }
+
+    if (subagentHas(info.description) || subagentHas(info.agent)) {
+      setSubagentField(row, ".subagent-name",
+        String(subagentHas(info.description) ? info.description : info.agent));
+    }
+    // The spawn task is long enough to swamp the row, so it lives in the
+    // tooltip where it stays one hover away.
+    if (subagentHas(info.task)) {
+      var nameEl = row.querySelector(".subagent-name");
+      if (nameEl) nameEl.title = String(info.task);
+    }
+    // A subagent can resolve to a different provider than the session, so the
+    // model is not decoration — it is the only place that difference shows.
+    if (subagentHas(info.resolvedModel)) setSubagentField(row, ".subagent-model", info.resolvedModel);
+    if (info.currentTool !== undefined) setSubagentField(row, ".subagent-tool", info.currentTool);
+    if (typeof info.cost === "number" && isFinite(info.cost)) {
+      setSubagentField(row, ".subagent-cost",
+        info.cost > 0 ? "$" + (info.cost < 0.01 ? info.cost.toFixed(4) : info.cost.toFixed(2)) : "");
+    }
+    if (typeof info.tokens === "number" && isFinite(info.tokens)) {
+      setSubagentField(row, ".subagent-tokens", info.tokens > 0 ? compactNum(info.tokens) : "");
+    }
+  }
+
+  /** Coalesced host snapshot — the only source of cost, tokens and currentTool. */
+  function renderSubagents(snapshot) {
+    var list = snapshot && Array.isArray(snapshot.subagents) ? snapshot.subagents : [];
+    for (var i = 0; i < list.length; i++) updateSubagentRow(list[i]);
+    if (list.length) scrollBottom();
+  }
+
+  /** Lifecycle frame — shown at once so a spawn is not up to 250 ms late. */
+  function onSubagentLifecycle(payload) {
+    if (!payload || typeof payload !== "object") return;
+    updateSubagentRow({
+      id: payload.id,
+      agent: payload.agent,
+      description: payload.description,
+      status: payload.status,
+      task: payload.task,
+      parentToolCallId: payload.parentToolCallId,
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Notices                                                             */
   /* ------------------------------------------------------------------ */
 
@@ -1053,7 +1206,12 @@
 
     var inputs = [];
     keyedProviders.forEach(function (p) {
-      var inp = field(t("{0} API key ({1})", p.label, p.envVar), p.placeholder, keyStatus[p.id]);
+      // No env var means the key is written into models.yml instead; naming a
+      // variable that nothing reads would send people editing their shell.
+      var labelText = p.envVar
+        ? t("{0} API key ({1})", p.label, p.envVar)
+        : t("{0} API key", p.label);
+      var inp = field(labelText, p.placeholder, keyStatus[p.id]);
       inputs.push({ id: p.id, inp: inp });
     });
 
@@ -3184,6 +3342,10 @@
     });
     welcomeEl.classList.remove("hidden");
     byToolCallId.clear();
+    // The orphan container is one of the children just removed above; drop the
+    // reference too, or the next spawn appends into a detached node.
+    subagentRows.clear();
+    subagentOrphansEl = null;
     currentAssistant = null;
     pendingLocalUser = 0;
     retryNotice = null;
@@ -3248,6 +3410,16 @@
         if (f.result != null) setToolBody(c3, resultText(f.result));
         break;
       }
+      case "subagent_lifecycle":
+        onSubagentLifecycle(f.payload);
+        break;
+      // Progress and events are rendered from the host's coalesced
+      // `t:"subagents"` snapshot instead — a single subagent emits dozens of
+      // these per second. The cases exist so they are recognised rather than
+      // falling through to the unknown-frame default.
+      case "subagent_progress":
+      case "subagent_event":
+        break;
       case "notice":
         addNotice(f.level, f.message);
         break;
@@ -3298,6 +3470,9 @@
           break;
         case "approvalResolved":
           dropApprovalModal(m.requestId);
+          break;
+        case "subagents":
+          renderSubagents(m.snapshot);
           break;
         case "models":
           models = Array.isArray(m.models) ? m.models : [];

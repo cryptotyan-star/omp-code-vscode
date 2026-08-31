@@ -482,7 +482,7 @@ test("the session board view is contributed and its commands resolve", () => {
   const extensionSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "src", "extension.ts"), "utf8");
   assert.match(
     extensionSrc,
-    /sessionCommandId\(arg\?: SessionInfo \| string\)/,
+    /sessionCommandId\(arg\?: SessionInfo \| BoardNode \| string\)/,
     "tree actions must accept both native row objects and explicit ids",
   );
 });

@@ -33,7 +33,8 @@ function sameOrigin(scope, event) {
 /**
  * @param {Window & typeof globalThis | Record<string, any>} scope
  * @returns {{ kind: "vscode"|"android"|"in-memory", post(message: object): void,
- *   subscribe(listener: (message: object) => void): () => void, dispose(): void }}
+ *   subscribe(listener: (message: object) => void): () => void,
+ *   setState(value: object|null): void, getState(): object|null, dispose(): void }}
  */
 export function createHostPort(scope = globalThis) {
   const override = scope.__OMP_HOST_PORT__;
@@ -42,6 +43,8 @@ export function createHostPort(scope = globalThis) {
       kind: "in-memory",
       post(message) { override.post(message); },
       subscribe(listener) { return override.subscribe(listener); },
+      setState(value) { if (typeof override.setState === "function") override.setState(value); },
+      getState() { return typeof override.getState === "function" ? override.getState() : null; },
       dispose() { if (typeof override.dispose === "function") override.dispose(); },
     };
   }
@@ -58,6 +61,7 @@ export function createHostPort(scope = globalThis) {
 
   const listeners = new Set();
   let disposed = false;
+  let androidState = null;
   let androidSlotInstalled = false;
   // JavaScriptReplyProxy replies are delivered on the origin-scoped injected
   // object itself (`ompHost`), not as generic page-wide window messages.
@@ -103,6 +107,22 @@ export function createHostPort(scope = globalThis) {
       if (disposed || !isRecord(message)) return;
       if (vscode) vscode.postMessage(message);
       else android.postMessage(JSON.stringify(message));
+    },
+    // The only state that survives a window reload. VS Code hands it back to
+    // the extension's WebviewPanelSerializer, which is what lets a chat tab
+    // find its own record again; Android reloads nothing, so it keeps the
+    // value in memory and the getter stays honest either way.
+    setState(value) {
+      if (disposed) return;
+      if (vscode) vscode.setState(value);
+      else androidState = value;
+    },
+    getState() {
+      // Mirrors `setState`: a disposed port owns nothing, and a renderer that
+      // read a state slot it can no longer write would act on a stale id.
+      if (disposed) return null;
+      if (vscode) return vscode.getState();
+      return androidState;
     },
     subscribe(listener) {
       if (disposed || typeof listener !== "function") return () => {};

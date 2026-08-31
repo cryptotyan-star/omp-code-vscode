@@ -13,6 +13,10 @@ const options = {
   external: ["vscode"],
   sourcemap: true,
   minify: false,
+  // Pinned, not left to the default: the vendored files carry their MIT
+  // attribution in `/*! … */` banners, and a later `minify: true` would drop
+  // them silently under the default policy.
+  legalComments: "eof",
   logLevel: "info",
 };
 

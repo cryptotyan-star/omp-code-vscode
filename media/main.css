@@ -559,6 +559,108 @@ button {
   user-select: none;
 }
 
+/* ------------------------------------------------------------------ */
+/* Subagents                                                           */
+/* ------------------------------------------------------------------ */
+
+/* Rows hang off the bottom of the tool card that spawned them, so the nesting
+   is visible without a second card frame: a rule and an indent, one step
+   smaller than the card's own head. */
+.subagent-list {
+  border-top: 1px solid var(--border);
+  padding: 4px 9px 5px 17px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Detached spawns, and lifecycle frames that beat their tool-call into the
+   transcript, have no card to sit under — they get their own boxed list. */
+.subagent-orphans {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.subagent-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.subagent-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+/* Same vocabulary as the tool dot: pulsing accent while it runs, then the
+   card's own ok/err colours. */
+.subagent-row[data-status="started"] .subagent-dot {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.subagent-row[data-status="completed"] .subagent-dot { background: var(--ok); }
+.subagent-row[data-status="failed"] .subagent-dot,
+.subagent-row[data-status="aborted"] .subagent-dot { background: var(--err); }
+.subagent-row[data-status="failed"] .subagent-name { color: var(--err); }
+
+.subagent-name {
+  flex: 0 1 auto;
+  color: var(--fg);
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The tool takes the slack: it changes constantly and is the least valuable
+   thing on the row to read in full. */
+.subagent-tool {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.subagent-cost,
+.subagent-tokens {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.subagent-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--accent-line);
+  border-radius: 3px;
+  background: var(--accent-wash);
+  color: var(--fg);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* omp runs every subagent in yolo mode regardless of the session's approval
+   setting, so this badge is a standing warning, not a status — it stays quiet
+   in colour but is never hidden. */
+.subagent-auto {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: help;
+}
+
 .tool-more:hover { color: var(--fg); }
 
 /* diff line colors inside tool output */
@@ -2002,6 +2104,19 @@ body[data-platform="android"] .tool-body pre {
   font-size: 13px;
   line-height: 1.55;
 }
+
+/* Android bumps every type size one step; the subagent row has to follow or it
+   becomes unreadable under a 14px tool head. */
+body[data-platform="android"] .subagent-list {
+  padding: 6px 12px 8px 22px;
+  gap: 4px;
+}
+
+body[data-platform="android"] .subagent-row { font-size: 13px; }
+
+body[data-platform="android"] .subagent-badge { font-size: 11px; }
+
+body[data-platform="android"] .subagent-orphans { border-radius: 14px; }
 
 body[data-platform="android"] .status-line {
   width: fit-content;

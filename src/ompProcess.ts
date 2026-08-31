@@ -54,6 +54,9 @@ export class OmpProcess {
     (code: number | null, signal: NodeJS.Signals | null) => void
   > = [];
   private readonly errorHandlers: Array<(err: NodeJS.ErrnoException) => void> = [];
+  /** Resolves when the child has actually gone; see {@link whenExited}. */
+  private exited: (() => void) | undefined;
+  private readonly exitedPromise = new Promise<void>((resolve) => (this.exited = resolve));
 
   /** True while the child process is alive and stop() has not been called. */
   get running(): boolean {
@@ -157,6 +160,7 @@ export class OmpProcess {
     });
 
     proc.on("exit", (code, signal) => {
+      this.exited?.();
       this.failAllPending(
         new Error(
           `omp process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`,
@@ -204,6 +208,36 @@ export class OmpProcess {
     if (this.running) {
       this.writeLine(frame);
     }
+  }
+
+  /**
+   * Resolves once the child process has really exited, or immediately when it
+   * never started. `stop()` only sends SIGTERM; callers that then delete the
+   * process's working directory (deleting a workspace) have to wait for the
+   * handle to be released, which on Windows is the difference between a
+   * successful `git worktree remove` and EBUSY.
+   */
+  whenExited(timeoutMs = 5000): Promise<void> {
+    const proc = this.proc;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        // Refusing to die is not a reason to hang the delete: escalate once and
+        // move on — a SIGKILLed child releases its handles immediately.
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          /* already dead */
+        }
+        resolve();
+      }, timeoutMs);
+      void this.exitedPromise.then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   /** Kill the process and reject any in-flight requests. */

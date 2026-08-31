@@ -101,3 +101,39 @@ test("Android adapter supports an onmessage-only injected object", () => {
   port.dispose();
   assert.equal(ompHost.onmessage, prior);
 });
+
+test("the VS Code state slot round-trips the tab id and closes with the port", () => {
+  // This slot is the whole of what survives a window reload: VS Code hands it
+  // back to the panel serializer, which is how a restored chat finds its own
+  // record again (see src/chatTabs.ts).
+  let slot: unknown = null;
+  const scope = fakeScope({
+    acquireVsCodeApi: () => ({
+      postMessage() {},
+      setState(value: unknown) { slot = value; },
+      getState: () => slot,
+    }),
+  });
+  const port = createHostPort(scope as never);
+  assert.equal(port.getState(), null);
+  port.setState({ tabId: "tab-1" });
+  assert.deepEqual(slot, { tabId: "tab-1" });
+  assert.deepEqual(port.getState(), { tabId: "tab-1" });
+
+  port.dispose();
+  // Both halves agree once disposed: the slot can no longer be written, so
+  // reading it would only hand the renderer an id it cannot keep current.
+  port.setState({ tabId: "tab-2" });
+  assert.deepEqual(slot, { tabId: "tab-1" });
+  assert.equal(port.getState(), null);
+});
+
+test("the Android adapter keeps its state in memory, since nothing reloads it", () => {
+  const scope = fakeScope({ ompHost: { postMessage() {} } });
+  const port = createHostPort(scope as never);
+  assert.equal(port.getState(), null);
+  port.setState({ tabId: "tab-1" });
+  assert.deepEqual(port.getState(), { tabId: "tab-1" });
+  port.dispose();
+  assert.equal(port.getState(), null);
+});

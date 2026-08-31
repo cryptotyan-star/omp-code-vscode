@@ -14,8 +14,14 @@ export interface KeyedProvider {
   provider: string;
   /** Secret Storage key. */
   secret: string;
-  /** Env var the omp CLI reads for this provider's credential. */
-  envVar: string;
+  /**
+   * Env var the omp CLI reads for this provider's credential.
+   *
+   * Omitted for providers omp has no env var for: their key is written into
+   * `models.yml` instead (see CONFIG_PROVIDERS), so there is nothing to inject
+   * into the process and nothing honest to name in the UI.
+   */
+  envVar?: string;
   /** Human label for UI. */
   label: string;
   /** Setup-form input placeholder. */
@@ -23,6 +29,63 @@ export interface KeyedProvider {
   /** contributed palette command that prompts for the key. */
   commandId: string;
 }
+
+/**
+ * Providers omp has no built-in id for, shipped as a `models.yml` block.
+ *
+ * omp resolves a credential from an env var only for providers it knows; a
+ * provider defined in `models.yml` must carry its `apiKey` in the file itself
+ * (validation: `"apiKey" is required when defining custom models unless auth is
+ * "none"`, and the file is not env-interpolated). So the key lives in Secret
+ * Storage and is written into the block at spawn — the same path
+ * `ompcode.customProviders` entries already take.
+ *
+ * The block is written only while a key is stored, and removed when it is
+ * cleared: a keyless block fails validation, and omp answers that by disabling
+ * *every* custom provider in the file, the user's own included.
+ *
+ * Model rows carry ids and names only. omp fills context window, max tokens,
+ * thinking levels and per-token cost from its own catalog, so prices are
+ * whatever omp ships rather than a number this extension invents.
+ */
+export interface ConfigProvider {
+  /** models.yml provider name — also the omp provider id in `provider/model`. */
+  name: string;
+  /** Secret Storage key holding the credential for it. */
+  secret: string;
+  /** The block merged into `~/.omp/agent/models.yml`, minus the apiKey. */
+  def: Record<string, unknown>;
+}
+
+/** Endpoint of the BigModel open platform (pay-as-you-go, not the Coding Plan). */
+export const BIGMODEL_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+
+export const CONFIG_PROVIDERS: readonly ConfigProvider[] = [
+  {
+    name: "bigmodel",
+    secret: "ompcode.providerKey.bigmodel",
+    def: {
+      baseUrl: BIGMODEL_BASE_URL,
+      api: "openai-completions",
+      // The ids the platform's own /models endpoint serves. Discovery
+      // (`discovery: openai-models-list`) would keep this list current by
+      // itself, but it resolves every model against a free-tier catalog entry
+      // and zeroes the prices — the one thing this provider exists to show.
+      models: [
+        { id: "glm-5.3", name: "GLM-5.3 (BigModel)" },
+        { id: "glm-5.3-flash", name: "GLM-5.3-Flash (BigModel)" },
+        { id: "glm-5.2", name: "GLM-5.2 (BigModel)" },
+        { id: "glm-5.1", name: "GLM-5.1 (BigModel)" },
+        { id: "glm-5-turbo", name: "GLM-5-Turbo (BigModel)" },
+        { id: "glm-5", name: "GLM-5 (BigModel)" },
+        { id: "glm-4.7", name: "GLM-4.7 (BigModel)" },
+        { id: "glm-4.6", name: "GLM-4.6 (BigModel)" },
+        { id: "glm-4.5-air", name: "GLM-4.5-Air (BigModel)" },
+        { id: "glm-4.5", name: "GLM-4.5 (BigModel)" },
+      ],
+    },
+  },
+];
 
 export const KEYED_PROVIDERS: readonly KeyedProvider[] = [
   {
@@ -60,6 +123,17 @@ export const KEYED_PROVIDERS: readonly KeyedProvider[] = [
     label: "OpenAI (ChatGPT)",
     placeholder: "sk-…",
     commandId: "ompcode.setOpenAiKey",
+  },
+  {
+    // No env var: omp has no built-in id for BigModel's pay-as-you-go endpoint,
+    // so this key reaches the agent through models.yml. The secret name is the
+    // one `injectProviderKeys` looks up for a models.yml provider.
+    id: "bigmodel",
+    provider: "bigmodel",
+    secret: "ompcode.providerKey.bigmodel",
+    label: "GLM BigModel (pay-as-you-go)",
+    placeholder: "xxxxxxxx.xxxxxxxx",
+    commandId: "ompcode.setBigModelKey",
   },
   {
     id: "alibaba",
