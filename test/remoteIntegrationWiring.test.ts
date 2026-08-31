@@ -130,3 +130,20 @@ test("an expired two-phase enrolment cannot activate and is revoked by timer", (
   assert.match(service, /schedulePairingExpiry\(\)/);
   assert.match(service, /secrets\.pairingExpiresAt <= Date\.now\(\)[\s\S]*this\.stop\(true\)/);
 });
+
+test("only the globalState host-lease owner opens the relay transport", () => {
+  assert.match(service, /new RemoteHostLease\(context\.globalState\)/);
+  const restore = service.slice(service.indexOf("async restore()"), service.indexOf("async start("));
+  assert.match(restore, /if \(await this\.acquireHostLease\(\)\) \{\s*this\.openTransport\(\)/);
+  assert.match(restore, /\} else \{[\s\S]*this\.scheduleHostRetry\(\)/);
+  const start = service.slice(service.indexOf("async start("), service.indexOf("async stop("));
+  assert.ok(start.indexOf("if (!(await this.acquireHostLease()))") < start.indexOf("await this.stop(true)"));
+  assert.match(start, /if \(await this\.acquireHostLease\(\)\) \{\s*this\.openTransport\(\)/);
+  const stop = service.slice(service.indexOf("async stop("), service.indexOf("async refreshPairing("));
+  assert.match(stop, /await this\.hostLease\.release\(\)/);
+  const dispose = service.slice(service.indexOf("dispose(): void"), service.indexOf("private async acquireHostLease"));
+  assert.match(dispose, /this\.hostLease\.stopHeartbeat\(\)[\s\S]*this\.hostLease\.release\(\)/);
+  const retry = service.slice(service.indexOf("private async retryHostAcquisition"), service.indexOf("private openTransport"));
+  assert.match(retry, /await this\.hostLease\.tryAcquire\(\)[\s\S]*await this\.readSecrets\(\)[\s\S]*isRemoteEpochRevoked/);
+  assert.equal(service.match(/this\.openTransport\(\);/g)?.length, 3, "every transport open stays behind a lease guard");
+});
