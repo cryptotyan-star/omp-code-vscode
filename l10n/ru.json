@@ -394,6 +394,7 @@
   "The file list was cut off at {0} files.": "Список файлов обрезан на {0} файлах.",
   "Open the diff": "Открыть diff",
   "Show diff": "Показать diff",
+  "Could not open the diff for {0}: {1}": "Не удалось открыть diff для {0}: {1}",
   "This workspace has no changes to review.": "В этом workspace нечего ревьюить — изменений нет.",
   "Discard": "Откатить",
   "Could not discard {0}: {1}": "Не удалось откатить {0}: {1}",

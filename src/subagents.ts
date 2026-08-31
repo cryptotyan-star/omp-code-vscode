@@ -288,10 +288,14 @@ export function reduceSubagentList(
       agent: str(entry.agent) || base.agent,
       agentSource: str(entry.agentSource) || base.agentSource,
       description: str(entry.description) || base.description || str(entry.agent),
-      status: toStatus(entry.status, base.status),
+      // Same race as an in-flight progress frame: the answer left omp while
+      // the agent was still running, and a terminal lifecycle frame landed
+      // first. The list must not resurrect what the frames already buried.
+      status: TERMINAL.has(base.status) ? base.status : toStatus(entry.status, base.status),
       task: str(entry.task) || base.task,
       parentToolCallId: str(entry.parentToolCallId) || base.parentToolCallId,
       index: num(entry.index, base.index),
+      detached: typeof entry.detached === "boolean" ? entry.detached : base.detached,
       sessionFile: str(entry.sessionFile) || base.sessionFile,
       resolvedModel: str(progress.resolvedModel) || base.resolvedModel,
       currentTool: str(progress.currentTool) || base.currentTool,

@@ -241,6 +241,11 @@ export function registerReviewCommands(
               { signal: controller.signal },
             );
           } catch (err) {
+            // "Cancel" on the progress notification aborts git mid-merge.
+            // That is the operator's own decision, not a failure to report.
+            if (controller.signal.aborted) {
+              return undefined;
+            }
             output.appendLine(`[review] merge ${record.branch} failed: ${describeError(err)}`);
             void vscode.window.showErrorMessage(
               t("Could not merge {0}: {1}", record.name, describeError(err)),
@@ -358,12 +363,20 @@ export function registerReviewCommands(
 
 /** Open one file side by side with its content in the workspace's base commit. */
 async function openFileDiff(record: WorkspaceRecord, change: FileChange): Promise<void> {
-  await vscode.commands.executeCommand(
-    "vscode.diff",
-    baseUri(record, change),
-    currentUri(record, change),
-    `${path.posix.basename(change.path)} (${record.baseRef} ${AGAINST_MARK} ${record.branch})`,
-  );
+  try {
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      baseUri(record, change),
+      currentUri(record, change),
+      `${path.posix.basename(change.path)} (${record.baseRef} ${AGAINST_MARK} ${record.branch})`,
+    );
+  } catch (err) {
+    // This file owns the error surface for every review command; leaving the
+    // rejection unhandled would send it only to the extension host log.
+    void vscode.window.showErrorMessage(
+      t("Could not open the diff for {0}: {1}", change.path, describeError(err)),
+    );
+  }
 }
 
 /**
