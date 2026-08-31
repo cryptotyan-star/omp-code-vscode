@@ -244,6 +244,15 @@ const NPM_SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$/;
 /** Floor on the gap between `host_tool_update` frames from a long wait. */
 export const WAIT_UPDATE_INTERVAL_MS = 5_000;
 
+/**
+ * The bridge's own ceiling on a handler's `text`. Each handler clamps what it
+ * builds — `workspace_diff` to `MAX_DIFF_BYTES` — but a handler bug must not
+ * be able to push an unbounded string through the RPC transport. Set above the
+ * diff budget plus the status lines around it, so nothing legitimate is ever
+ * cut, and marked in-band when it fires so the model knows to narrow the call.
+ */
+const MAX_RESULT_TEXT_CHARS = 256_000;
+
 // ---------------------------------------------------------------------------
 // Argument validation
 //
@@ -1170,6 +1179,10 @@ interface PendingCall {
 
 /** Human-readable, stack-free. A stack in a tool result is noise the model cannot act on. */
 function describeError(err: unknown): string {
+  return scrubHostPaths(describeErrorRaw(err));
+}
+
+function describeErrorRaw(err: unknown): string {
   if (err instanceof Error) {
     return err.message || err.name || "unknown error";
   }
@@ -1181,8 +1194,72 @@ function describeError(err: unknown): string {
   }
 }
 
+/**
+ * Git and child-process failures quote absolute paths (`/Users/…/repo.worktrees/x`,
+ * `C:\Users\…`), and those have no business reaching the model. Only paths
+ * rooted at a host directory are replaced; repo-relative paths (`src/foo.ts`)
+ * and pseudo-paths like `/dev/null` stay readable.
+ */
+function scrubHostPaths(message: string): string {
+  return message.replace(
+    /(?:\/(?:Users|home|root|private|var|opt|tmp)\/[^\s"'`,;)\]]*)|(?:[A-Za-z]:\\[^\s"'`,;)\]]*)/g,
+    "<host path>",
+  );
+}
+
 function isAbort(err: unknown): boolean {
   return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The bridge never trusts a handler's return value. One that resolves to
+ * `undefined`, to an object without a usable `text`, or to more text than the
+ * transport should carry still has to end in exactly one structured result —
+ * the naive `result.text` access turned the first two into an unhandled
+ * rejection and a call that never settled at all.
+ */
+function normalizeOutcome(
+  toolName: string,
+  result: unknown,
+): { text: string; isError: boolean; details?: unknown; degraded: boolean } {
+  if (!isPlainObject(result)) {
+    return {
+      text:
+        `${toolName} produced no result the host could read. The call ran and nothing it did was ` +
+        `undone; call workspace_list to see the current state, then retry if it still helps.`,
+      isError: true,
+      degraded: true,
+    };
+  }
+  const text = result["text"];
+  if (typeof text !== "string" || text === "") {
+    return {
+      text:
+        `${toolName} produced an empty result. The call ran and nothing it did was undone; call ` +
+        `workspace_list to see the current state, then retry if it still helps.`,
+      isError: true,
+      degraded: true,
+    };
+  }
+  const isError = result["isError"] === true;
+  const details = result["details"];
+  if (text.length > MAX_RESULT_TEXT_CHARS) {
+    return {
+      text:
+        text.slice(0, MAX_RESULT_TEXT_CHARS) +
+        `\n\n*** truncated by the host at ${MAX_RESULT_TEXT_CHARS} characters: the tool's output was ` +
+        `larger than what can be sent back. Call it again with a narrower argument — for ` +
+        `workspace_diff, one path or a smaller maxBytes — to read the rest. ***`,
+      isError,
+      details,
+      degraded: true,
+    };
+  }
+  return { text, isError, details, degraded: false };
 }
 
 export class HostToolBridge {
@@ -1249,10 +1326,16 @@ export class HostToolBridge {
       signal: call.controller.signal,
       sendUpdate: (text: string) => {
         if (call.settled || typeof text !== "string" || text === "") return;
+        // Same ceiling as a final result, marked in-band when it fires.
+        const clamped =
+          text.length <= MAX_RESULT_TEXT_CHARS
+            ? text
+            : text.slice(0, MAX_RESULT_TEXT_CHARS) +
+              "\n\n*** truncated by the host: this update was larger than what can be sent back. ***";
         this.post({
           type: "host_tool_update",
           id,
-          partialResult: { content: [{ type: "text", text }] },
+          partialResult: { content: [{ type: "text", text: clamped }] },
         });
       },
     };
@@ -1260,11 +1343,16 @@ export class HostToolBridge {
     // `Promise.resolve().then(...)` rather than a bare call: a handler that
     // throws *synchronously* before its first await would otherwise escape
     // past `.catch` and leave the call unanswered.
+    const args = isPlainObject(frame.arguments) ? { ...frame.arguments } : {};
     Promise.resolve()
-      .then(() => handler.run({ ...(frame.arguments ?? {}) }, ctx))
+      .then(() => handler.run(args, ctx))
       .then(
-        (result) => {
-          this.settle(id, result.text, result.isError === true, result.details);
+        (result: unknown) => {
+          const normalized = normalizeOutcome(toolName, result);
+          if (normalized.degraded) {
+            this.log(`host tool ${toolName} returned an unusable result (${id})`);
+          }
+          this.settle(id, normalized.text, normalized.isError, normalized.details);
         },
         (err: unknown) => {
           if (isAbort(err)) {

@@ -179,6 +179,27 @@ export class Orchestrator {
    * added a row, and the ceiling is walked straight past into N checkouts and
    * N metered agents. The manager's own repo lock cannot help: it is taken
    * inside `create`, after the count was already read here.
+   *
+   * Races this chain settles, and why none of them needs more machinery:
+   *
+   * - Reentrancy is impossible by construction. `createOne` touches only
+   *   {@link OrchestratorDeps} members — `repoRoot`, `manager`, `setupPolicy`,
+   *   `output` — and none of them call back into this class, so nothing a
+   *   create starts can queue another create before the first has finished.
+   *   The fresh workspace's agent talks to *its own* bridge, not this one.
+   * - Double-start of the same name is two links on this chain, so the second
+   *   reads `manager.list()` only after the first's checkout exists and the
+   *   manager rejects the duplicate branch. The rejection unwedges the chain
+   *   (see `create`), so a third, differently-named create still runs.
+   * - Bridge teardown mid-create cancels the *report*, not the work: `create`
+   *   takes no abort signal, so an `abortAll` during a checkout leaves the
+   *   checkout to finish and the workspace to land on the board. The cancel
+   *   text already tells the model exactly that, and `workspace_list` shows
+   *   the result.
+   * - A create that never settles wedges the chain, on purpose: anything that
+   *   could unblock it (a manager timeout, a git failure) rejects eventually,
+   *   and refusing to start an *unknown* number of creates behind one that
+   *   hangs is the safe side of that trade.
    */
   private createChain: Promise<unknown> = Promise.resolve();
 
