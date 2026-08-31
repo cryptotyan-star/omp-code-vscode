@@ -391,11 +391,12 @@ export class WorkspaceManager {
 
   /** Remember the JSONL a session landed on, so a restart can resume it. */
   async rememberSessionFile(id: string, sessionFile: string): Promise<void> {
-    const record = this.deps.registry.get(id);
-    if (!record || record.sessionFile === sessionFile) {
-      return;
-    }
-    await this.deps.registry.upsert({ ...record, sessionFile });
+    // `update`, not read-then-upsert: the session layer can land this while a
+    // delete of the same workspace is in flight, and a snapshot-based write
+    // would resurrect the record the delete had just removed.
+    await this.deps.registry.update(id, (record) =>
+      record.sessionFile === sessionFile ? record : { ...record, sessionFile },
+    );
   }
 
   /**
@@ -420,23 +421,20 @@ export class WorkspaceManager {
 
   /** Persist a model the user switched to from this workspace's chat. */
   async rememberModel(id: string, model: string): Promise<void> {
-    const record = this.deps.registry.get(id);
     const next = model.trim() || undefined;
-    if (!record || record.model === next) {
-      return;
-    }
-    // Otherwise the pin would win again on the next restart and silently move
-    // the agent back off the model the user just chose.
-    await this.deps.registry.upsert({ ...record, model: next });
+    // `update` so a concurrent field write (a setup state landing, a session
+    // file being remembered) is composed with rather than erased, and a delete
+    // racing this still ends with the record gone.
+    await this.deps.registry.update(id, (record) =>
+      record.model === next ? record : { ...record, model: next },
+    );
   }
 
   /** Persist an approval tier the user switched to from this workspace's chat. */
   async rememberApprovalMode(id: string, approvalMode: ApprovalMode): Promise<void> {
-    const record = this.deps.registry.get(id);
-    if (!record || record.approvalMode === approvalMode) {
-      return;
-    }
-    await this.deps.registry.upsert({ ...record, approvalMode });
+    await this.deps.registry.update(id, (record) =>
+      record.approvalMode === approvalMode ? record : { ...record, approvalMode },
+    );
   }
 
   /** Releases the registry subscription; the manager outlives nothing else. */
@@ -511,13 +509,12 @@ export class WorkspaceManager {
   }
 
   private async setSetupState(id: string, state: WorkspaceSetupState): Promise<void> {
-    const record = this.deps.registry.get(id);
-    // A record removed while setup was running is not an error worth throwing:
-    // the setup result has nowhere to go, and that is the whole consequence.
-    if (!record || record.setupState === state) {
-      return;
-    }
-    await this.deps.registry.upsert({ ...record, setupState: state });
+    // `update`: a record removed while setup was running is not an error worth
+    // throwing — the result has nowhere to go — and a snapshot-based write here
+    // would resurrect it. Unchanged state skips the write entirely.
+    await this.deps.registry.update(id, (record) =>
+      record.setupState === state ? record : { ...record, setupState: state },
+    );
   }
 
   private async openChatFor(record: WorkspaceRecord, prompt?: string): Promise<void> {

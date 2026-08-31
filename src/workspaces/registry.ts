@@ -186,6 +186,14 @@ export class WorkspaceRegistry {
     return this.records.find((record) => record.id === id);
   }
 
+  /**
+   * Insert or replace a record the caller owns outright — `create`'s fresh id,
+   * or a write whose contents were derived somewhere that already guaranteed
+   * the record is live. Anything that *reads* a record and writes back a
+   * variant of it belongs in {@link update}: an upsert built from a snapshot
+   * read outside the write queue can resurrect a record another writer had
+   * just removed.
+   */
   async upsert(record: WorkspaceRecord): Promise<void> {
     await this.write((current) => {
       const next = [...current];
@@ -197,6 +205,36 @@ export class WorkspaceRegistry {
       }
       return next;
     });
+  }
+
+  /**
+   * Read-modify-write one record, as a single queued step.
+   *
+   * The mutation sees the record as it is when its turn in the write queue
+   * comes — not a snapshot taken before it — so two overlapping updates
+   * compose instead of the last one erasing the first's field, and a `remove`
+   * queued earlier wins: a record that is gone at execution time is a no-op,
+   * never a resurrection. Returning the same record unchanged skips the write
+   * and the change event, so "nothing changed" stays free.
+   */
+  async update(id: string, mutate: (current: WorkspaceRecord) => WorkspaceRecord): Promise<boolean> {
+    let applied = false;
+    await this.write((current) => {
+      const at = current.findIndex((existing) => existing.id === id);
+      if (at === -1) {
+        return undefined;
+      }
+      const existing = current[at]!;
+      const next = mutate(existing);
+      if (next === existing) {
+        return undefined;
+      }
+      applied = true;
+      const records = [...current];
+      records[at] = next;
+      return records;
+    });
+    return applied;
   }
 
   async remove(id: string): Promise<void> {

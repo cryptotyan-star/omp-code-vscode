@@ -335,3 +335,105 @@ test(
     await assert.rejects(() => baseContent(repo, "0".repeat(40), "kept.txt"));
   },
 );
+
+// ------------------------------------------------------ limit boundaries ----
+
+test(
+  "fileDiff at exactly the byte budget is whole; one byte less truncates within it",
+  { skip: hasGit ? false : "git is not on PATH" },
+  async (t) => {
+    const { repo, baseSha } = await makeRepo(t);
+    await fs.writeFile(path.join(repo, "big.txt"), Array.from({ length: 300 }, (_, i) => `line ${i}\n`).join(""));
+
+    const whole = await fileDiff(repo, baseSha, "big.txt");
+    const budget = Buffer.byteLength(whole, "utf8");
+    // Boundary: a diff that fits exactly is not a truncation, and not one byte
+    // of it is dropped.
+    assert.equal(await fileDiff(repo, baseSha, "big.txt", { maxBytes: budget }), whole);
+    assert.doesNotMatch(whole, /diff truncated/);
+
+    const cut = await fileDiff(repo, baseSha, "big.txt", { maxBytes: budget - 1 });
+    assert.match(cut, /\*\*\* diff truncated at (\d+) of (\d+) bytes \*\*\*\n$/);
+    const counts = /\*\*\* diff truncated at (\d+) of (\d+) bytes \*\*\*/.exec(cut)!;
+    assert.equal(Number(counts[1]) <= budget - 1, true, "kept bytes exceed the budget");
+    assert.equal(Number(counts[2]), budget);
+    // The head really is as small as the marker claims.
+    const head = cut.slice(0, cut.indexOf("*** diff truncated"));
+    assert.equal(Buffer.byteLength(head, "utf8"), Number(counts[1]));
+  },
+);
+
+test(
+  "a zero or negative byte budget keeps nothing but still says so",
+  { skip: hasGit ? false : "git is not on PATH" },
+  async (t) => {
+    const { repo, baseSha } = await makeRepo(t);
+    await fs.writeFile(path.join(repo, "big.txt"), Array.from({ length: 300 }, (_, i) => `line ${i}\n`).join(""));
+    const whole = await fileDiff(repo, baseSha, "big.txt");
+
+    for (const maxBytes of [0, -1024]) {
+      const cut = await fileDiff(repo, baseSha, "big.txt", { maxBytes });
+      // `lastIndexOf(LF, -1)` reads as "search from the end", which used to
+      // return the diff's last line instead of nothing.
+      assert.match(cut, /^\*\*\* diff truncated at 0 of \d+ bytes \*\*\*\n$/, `maxBytes ${maxBytes}`);
+      assert.ok(cut.length < whole.length, `maxBytes ${maxBytes}`);
+    }
+  },
+);
+
+test(
+  "a single line longer than the budget is cut mid-line but never mid-character",
+  { skip: hasGit ? false : "git is not on PATH" },
+  async (t) => {
+    const { repo, baseSha } = await makeRepo(t);
+    // Paths reach the diff as raw bytes only with quotePath off (a user
+    // setting); with git's default they are octal-escaped and the first line
+    // is pure ASCII.
+    await git(["config", "core.quotePath", "false"], { cwd: repo });
+    // A path of three-byte characters makes the diff's *first* line ("diff
+    // --git a/… b/…") longer than the budget, so no line boundary fits at
+    // all — minified or generated content in miniature.
+    const name = "日".repeat(60) + ".txt";
+    await fs.writeFile(path.join(repo, name), "content\n");
+
+    // 101 bytes in: the cut lands *inside* a three-byte character (13 bytes
+    // of header then 88 = 29×3 + 1 name bytes), which is precisely the case
+    // the naive `subarray(0, maxBytes)` used to decode into U+FFFD.
+    const cut = await fileDiff(repo, baseSha, name, { maxBytes: 101 });
+    assert.match(cut, /\*\*\* diff truncated at \d+ of \d+ bytes \*\*\*\n$/);
+    assert.ok(!cut.includes("\uFFFD"), "the cut split a multi-byte character");
+    const head = cut.slice(0, cut.indexOf("*** diff truncated"));
+    assert.ok(Buffer.byteLength(head, "utf8") <= 101, `head was ${Buffer.byteLength(head, "utf8")} bytes`);
+  },
+);
+
+test(
+  "maxFiles below one is totals-only, not an index from the end",
+  { skip: hasGit ? false : "git is not on PATH" },
+  async (t) => {
+    const { repo, baseSha } = await makeRepo(t);
+    for (const relative of ["a.txt", "b.txt", "c.txt"]) {
+      await fs.writeFile(path.join(repo, relative), "line\n");
+    }
+
+    // Zero and negative alike used to reach `files.slice(0, maxFiles)`, and a
+    // negative index there keeps all but the *last* file.
+    for (const maxFiles of [0, -1]) {
+      const cut = await workspaceDiff(repo, baseSha, { maxFiles });
+      assert.deepEqual(cut.files, [], `maxFiles ${maxFiles}`);
+      assert.equal(cut.truncated, true, `maxFiles ${maxFiles}`);
+      // The totals still describe everything there is.
+      assert.equal(cut.added, 3, `maxFiles ${maxFiles}`);
+      assert.equal(cut.deleted, 0, `maxFiles ${maxFiles}`);
+    }
+
+    // Fractions floor, and a non-number falls back to the default rather than
+    // becoming NaN comparisons downstream.
+    const fractional = await workspaceDiff(repo, baseSha, { maxFiles: 1.9 });
+    assert.equal(fractional.files.length, 1);
+    assert.equal(fractional.truncated, true);
+    const fallback = await workspaceDiff(repo, baseSha, { maxFiles: Number.NaN });
+    assert.equal(fallback.files.length, 3);
+    assert.equal(fallback.truncated, false);
+  },
+);

@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { git, listWorktrees } from "../src/workspaces/git.ts";
+import { mergeWorkspace } from "../src/workspaces/merge.ts";
 import { WorkspaceManager, type WorkspaceManagerDeps } from "../src/workspaces/manager.ts";
 import { WorkspaceRegistry, type WorkspaceStore } from "../src/workspaces/registry.ts";
 import type { WorkspaceRecord } from "../src/workspaces/types.ts";
@@ -350,4 +351,173 @@ test("the extension wires the terminal setup runner into the manager", async () 
   const source = await fs.readFile(path.join(root, "src", "extension.ts"), "utf8");
   assert.match(source, /runSetup: runWorkspaceSetup/);
   assert.match(source, /from "\.\/workspaces\/setupRun"/);
+});
+
+// ------------------------------------------------- registry write races ----
+
+/** `MemoryStore` whose updates wait on a gate, to hold the write queue open. */
+class GatedStore extends MemoryStore {
+  private gate: Promise<void> = Promise.resolve();
+
+  hold(gate: Promise<void>): void {
+    this.gate = gate;
+  }
+
+  override update(key: string, value: unknown): Thenable<void> {
+    return this.gate.then(() => super.update(key, value));
+  }
+}
+
+/** A record that exists only in the registry — enough for the field writers. */
+function unregisteredRecord(over: Partial<WorkspaceRecord> = {}): WorkspaceRecord {
+  return {
+    id: "ws-1",
+    name: "feat-a",
+    repoRoot: "/nowhere",
+    worktreePath: "/nowhere/feat-a",
+    branch: "omp/feat-a",
+    baseRef: "main",
+    baseSha: "0".repeat(40),
+    createdAt: 1,
+    setupState: "pending",
+    ...over,
+  };
+}
+
+test("a field write landing after a delete cannot resurrect the record", async () => {
+  // The interleaving the manager used to lose: the session layer reads the
+  // record (still present — the queue is held open), a delete is queued under
+  // it, and the stale snapshot is then written back on top. Deterministic,
+  // because every step is queued before the gate opens.
+  const store = new GatedStore();
+  const registry = new WorkspaceRegistry(store);
+  const h = harness({ registry });
+  await registry.upsert(unregisteredRecord());
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  store.hold(gate);
+  const blocker = registry.upsert(unregisteredRecord({ id: "ws-2", name: "stranger" }));
+  const deleting = registry.remove("ws-1");
+  // Reads ws-1 as present and queues its write behind the delete.
+  const remembering = h.manager.rememberSessionFile("ws-1", "/late/session.jsonl");
+  release();
+  await Promise.all([blocker, deleting, remembering]);
+
+  assert.equal(h.manager.get("ws-1"), undefined);
+  assert.deepEqual(
+    registry.list().map((r) => r.id),
+    ["ws-2"],
+  );
+});
+
+test("concurrent field updates on one record compose", async () => {
+  const registry = new WorkspaceRegistry(new MemoryStore());
+  const h = harness({ registry });
+  await registry.upsert(unregisteredRecord());
+
+  await Promise.all([
+    h.manager.rememberModel("ws-1", "prov/x"),
+    h.manager.rememberApprovalMode("ws-1", "yolo"),
+    h.manager.rememberSessionFile("ws-1", "/s.jsonl"),
+  ]);
+
+  const after = h.manager.get("ws-1")!;
+  assert.equal(after.model, "prov/x");
+  assert.equal(after.approvalMode, "yolo");
+  assert.equal(after.sessionFile, "/s.jsonl");
+});
+
+test("a delete racing field writes on a live workspace always ends deleted", { skip }, async (t) => {
+  const repo = await makeRepo(t);
+  const h = harness();
+  const record = await h.manager.create(repo, { name: "feat-a" });
+
+  await Promise.all([
+    h.manager.remove(record.id, { deleteBranch: true }),
+    h.manager.rememberModel(record.id, "prov/x"),
+    h.manager.rememberApprovalMode(record.id, "yolo"),
+  ]);
+
+  assert.equal(h.manager.get(record.id), undefined);
+  assert.equal((await listWorktrees(repo)).length, 1);
+});
+
+test("concurrent creates in one repository both land", { skip }, async (t) => {
+  const repo = await makeRepo(t);
+  const h = harness();
+
+  const [a, b] = await Promise.all([
+    h.manager.create(repo, { name: "feat-a" }),
+    h.manager.create(repo, { name: "feat-b" }),
+  ]);
+
+  assert.deepEqual(
+    h.manager.list().map((r) => r.name).sort(),
+    ["feat-a", "feat-b"],
+  );
+  // Main + both worktrees, on distinct branches and in distinct directories.
+  assert.equal((await listWorktrees(repo)).length, 3);
+  assert.notEqual(a.worktreePath, b.worktreePath);
+});
+
+test("concurrent deletes of two workspaces in one repository both land", { skip }, async (t) => {
+  const repo = await makeRepo(t);
+  const h = harness();
+  const a = await h.manager.create(repo, { name: "feat-a" });
+  const b = await h.manager.create(repo, { name: "feat-b" });
+
+  await Promise.all([
+    h.manager.remove(a.id, { deleteBranch: true }),
+    h.manager.remove(b.id, { deleteBranch: true }),
+  ]);
+
+  assert.deepEqual(h.manager.list(), []);
+  assert.equal((await listWorktrees(repo)).length, 1);
+});
+
+test("a create in one repository racing a delete in another keeps both honest", { skip }, async (t) => {
+  const repoA = await makeRepo(t);
+  const repoB = await makeRepo(t);
+  const h = harness();
+  const doomed = await h.manager.create(repoA, { name: "feat-a" });
+
+  const [, created] = await Promise.all([
+    h.manager.remove(doomed.id, { deleteBranch: true }),
+    h.manager.create(repoB, { name: "feat-b" }),
+  ]);
+
+  assert.equal(h.manager.get(doomed.id), undefined);
+  assert.equal(h.manager.get(created.id)!.repoRoot, created.repoRoot);
+  assert.equal((await listWorktrees(repoA)).length, 1);
+  assert.equal((await listWorktrees(repoB)).length, 2);
+});
+
+test("create and merge on one repository are serialized by the repo lock", { skip }, async (t) => {
+  const repo = await makeRepo(t);
+  const h = harness();
+  const record = await h.manager.create(repo, { name: "feat-a" });
+  await fs.writeFile(path.join(record.worktreePath, "a.txt"), "merged work\n");
+  await git(["add", "a.txt"], { cwd: record.worktreePath });
+  await git(["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "work"], {
+    cwd: record.worktreePath,
+  });
+
+  const [, mergeResult] = await Promise.all([
+    h.manager.create(repo, { name: "feat-b" }),
+    mergeWorkspace({
+      repoRoot: repo,
+      worktreePath: record.worktreePath,
+      branch: record.branch,
+      baseRef: record.baseRef,
+      baseSha: record.baseSha,
+      strategy: "merge",
+    }),
+  ]);
+
+  assert.equal(mergeResult.merged, true, mergeResult.message);
+  assert.equal(h.manager.list().length, 2);
+  assert.equal(await fs.readFile(path.join(repo, "a.txt"), "utf8"), "merged work\n");
 });

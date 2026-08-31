@@ -8,13 +8,21 @@
  * claim is exactly what needs checking. `runVerify` is that check, and it is
  * deliberately dumb: it runs one shell command and reports the exit code.
  *
- * Two things it must not do:
+ * Three things it must not do:
  *
  *  - **Guess the command.** A wrong guess (`npm test` in a repo with no tests,
  *    a script that starts a dev server and never returns) burns ten minutes and
  *    then reports a failure that is not one. Only the explicit `verify` field
  *    and the three conventional script names below are consulted; anything else
  *    is `undefined`, which the caller can surface as "tell me what to run".
+ *  - **Run a command the repository did not declare.** `runVerify` spawns a
+ *    shell with the editor's own environment, and its `command` argument
+ *    arrives from callers that relay model output. The gate over that argument
+ *    lives *here*, not only in whatever host tool happens to sit in front: a
+ *    caller may name one of the repo's own npm scripts (`npm run <name>`, the
+ *    name really present in the package.json being verified) or echo back the
+ *    command the repo itself declares — and nothing else. See
+ *    {@link authorizeExplicitCommand}.
  *  - **Leak processes.** A verify command is usually a script that spawns more
  *    processes, and killing only the shell on timeout orphans them: a `vitest
  *    --watch` left behind holds a port and every later verify in that worktree
@@ -32,7 +40,10 @@ import { readWorkspaceConfig } from "./setup.ts";
 
 export interface VerifyResult {
   ok: boolean;
-  /** The command line that was executed; empty when there was nothing to run. */
+  /**
+   * The command line that was executed; empty when there was nothing to run —
+   * or when the caller-supplied command was refused by the allowlist gate.
+   */
   ran: string;
   /** `null` when the process was killed by a signal, or never started. */
   exitCode: number | null;
@@ -73,16 +84,80 @@ const KILL_GRACE_MS = 5_000;
  */
 const HARD_SETTLE_MS = 1_000;
 
+const NO_COMMAND_MESSAGE =
+  "No verify command is configured for this workspace. Set `verify` in .ompcode/workspace.json, " +
+  "add a `test`, `check` or `build` script to package.json, or pass `npm run <script>` " +
+  "for a script it declares.";
+
+/**
+ * The one shape an explicit `command` may take beyond the repo's own
+ * declaration: `npm run <name>`, where `<name>` is a bare script name — the
+ * same rule the host tool enforces (`NPM_SCRIPT_NAME` in hostTools.ts), restated
+ * here so the gate holds no matter who calls. Alphanumeric first, then letters,
+ * digits, `:`, `.`, `_`, `-`, at most 64 characters: no shell metacharacters,
+ * no whitespace, no `/` or `\` — which is what makes path traversal and a
+ * second command after `;` or `&&` unrepresentable rather than merely unlikely.
+ */
+const NPM_SCRIPT_COMMAND = /^npm run ([A-Za-z0-9][A-Za-z0-9:._-]{0,63})$/;
+
+/** Why a caller-supplied command was refused, in one English line. */
+const refusedMessage = (command: string, reason: string): string =>
+  `Refused to run ${JSON.stringify(command)}: ${reason} This gate runs only what the repository ` +
+  `itself declares — pass no command to run the project's own verify command, or ` +
+  `"npm run <script>" for a script named in the package.json of the workspace.`;
+
+/**
+ * Decide whether a caller-supplied `command` may run in `target.cwd`.
+ *
+ * Two answers mean yes:
+ *
+ *  - it is byte-for-byte the command the repository declares (`.ompcode/` +
+ *    `workspace.json`'s `verify`, or the package.json script picked below) —
+ *    the orchestrator relays exactly that string, and the repo could have
+ *    declared the same line in a script body anyway; or
+ *  - it is `npm run <name>` and `<name>` is really a script in the package.json
+ *    beside the code. `Object.hasOwn`, not `in`: `in` would accept `"toString"`
+ *    off the prototype.
+ *
+ * Everything else — a composed shell line, arguments after the name, a script
+ * the repo never declared, a path — is refused with a reason, before any spawn.
+ */
+async function authorizeExplicitCommand(
+  command: string,
+  target: VerifyTarget,
+): Promise<{ ok: true } | { ok: false; output: string }> {
+  if (command === target.command) {
+    return { ok: true };
+  }
+  const npm = NPM_SCRIPT_COMMAND.exec(command);
+  if (!npm) {
+    return {
+      ok: false,
+      output: refusedMessage(
+        command,
+        "it is neither the workspace's own verify command nor `npm run <script>`.",
+      ),
+    };
+  }
+  const name = npm[1]!;
+  const scripts = await readPackageScripts(target.cwd);
+  if (!scripts || !Object.hasOwn(scripts, name)) {
+    return {
+      ok: false,
+      output: refusedMessage(
+        command,
+        `"${name}" is not a script in the package.json at ${target.cwd}.`,
+      ),
+    };
+  }
+  return { ok: true };
+}
 /**
  * The only script names worth assuming. `test` first because it is the one
  * that actually proves something; `build` last because compiling is the
  * weakest of the three signals.
  */
 const SCRIPT_PREFERENCE = ["test", "check", "build"] as const;
-
-const NO_COMMAND_MESSAGE =
-  "No verify command is configured for this workspace. Set `verify` in .ompcode/workspace.json, " +
-  "add a `test`, `check` or `build` script to package.json, or pass an explicit command.";
 
 /** `undefined` for a missing, unreadable or malformed package.json. */
 async function readPackageScripts(worktreePath: string): Promise<Record<string, unknown> | undefined> {
@@ -263,9 +338,11 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
  * Run the verify command in `worktreePath` and collect the tail of its output.
  *
  * Never rejects: a verify that could not run is a red gate with an
- * explanation, not an exception for the caller to translate. The environment
- * is inherited, because the command is the repo's own and expects the PATH,
- * NVM shims and tokens the user has.
+ * explanation, not an exception for the caller to translate. That includes a
+ * `command` the allowlist refused — {@link authorizeExplicitCommand} decides
+ * before anything spawns, so the refusal itself costs no process. The
+ * environment is inherited, because the command is the repo's own and expects
+ * the PATH, NVM shims and tokens the user has.
  */
 export async function runVerify(
   worktreePath: string,
@@ -277,6 +354,23 @@ export async function runVerify(
   // Read the config even for an explicit command: the caller supplies *what* to
   // run, the repo still says *where*.
   const target = await resolveVerifyTarget(worktreePath);
+  // The allowlist gate, before anything spawns: an explicit command is the one
+  // part of this call a model can influence, and it runs in a shell with the
+  // editor's own environment. Safe regardless of caller, not just the host
+  // tool that happens to sit in front today.
+  if (explicit && explicit !== target.command) {
+    const verdict = await authorizeExplicitCommand(explicit, target);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        ran: "",
+        exitCode: null,
+        durationMs: Date.now() - started,
+        output: verdict.output,
+        timedOut: false,
+      };
+    }
+  }
   const resolved = explicit && explicit.length > 0 ? explicit : target.command;
   if (!resolved) {
     return {

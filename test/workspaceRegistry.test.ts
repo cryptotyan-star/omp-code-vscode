@@ -202,3 +202,100 @@ test("records persist across registry instances over the same store", async () =
     ["a"],
   );
 });
+
+// ---------------------------------------------------------------- update ----
+
+test("update mutates the freshest record and persists it", async () => {
+  const store = makeStore({});
+  const registry = new WorkspaceRegistry(store);
+  await registry.upsert(record({ id: "a", setupState: "pending" }));
+
+  const applied = await registry.update("a", (current) => ({ ...current, setupState: "done" }));
+
+  assert.equal(applied, true);
+  assert.equal(registry.get("a")!.setupState, "done");
+  assert.equal(store.data.get(WORKSPACES_KEY)!.length, 1);
+});
+
+test("update on a missing record is a no-op: no write, no event", async () => {
+  const store = makeStore({});
+  const registry = new WorkspaceRegistry(store);
+  let fired = 0;
+  registry.onDidChange(() => {
+    fired += 1;
+  });
+
+  const applied = await registry.update("missing", (current) => ({ ...current, setupState: "done" }));
+
+  assert.equal(applied, false);
+  assert.equal(store.writes, 0);
+  assert.equal(fired, 0);
+});
+
+test("update skips the write when the mutation changes nothing", async () => {
+  const store = makeStore({});
+  const registry = new WorkspaceRegistry(store);
+  await registry.upsert(record({ id: "a" }));
+  const before = store.writes;
+  let fired = 0;
+  registry.onDidChange(() => {
+    fired += 1;
+  });
+
+  const applied = await registry.update("a", (current) => current);
+
+  assert.equal(applied, false);
+  assert.equal(store.writes, before);
+  assert.equal(fired, 0);
+});
+
+test("a snapshot-based write resurrects a deleted record; update cannot", async () => {
+  // The race the manager used to lose: read a record outside the write queue,
+  // let a delete land, then write the stale snapshot back. `upsert` re-adds it
+  // — which is why upsert is only for caller-owned records — while `update`
+  // sees the record as the queue has it and declines.
+  const registry = new WorkspaceRegistry(makeStore({}));
+  await registry.upsert(record({ id: "a" }));
+  const stale = registry.get("a")!;
+  await registry.remove("a");
+
+  await registry.upsert({ ...stale, setupState: "done" });
+  assert.deepEqual(
+    registry.list().map((r) => r.id),
+    ["a"],
+    "upsert after remove resurrects — read-modify-write must go through update",
+  );
+
+  await registry.remove("a");
+  await registry.update("a", (current) => ({ ...current, setupState: "done" }));
+  assert.deepEqual(registry.list(), []);
+});
+
+test("concurrent updates compose instead of overwriting each other's field", async () => {
+  const registry = new WorkspaceRegistry(makeStore({}));
+  await registry.upsert(record({ id: "a" }));
+
+  await Promise.all([
+    registry.update("a", (current) => ({ ...current, model: "prov/x" })),
+    registry.update("a", (current) => ({ ...current, sessionFile: "/s.jsonl" })),
+    registry.update("a", (current) => ({ ...current, setupState: "running" })),
+  ]);
+
+  const after = registry.get("a")!;
+  assert.equal(after.model, "prov/x");
+  assert.equal(after.sessionFile, "/s.jsonl");
+  assert.equal(after.setupState, "running");
+});
+
+test("remove racing update on one record ends removed, in both queue orders", async () => {
+  const run = async (updateFirst: boolean): Promise<void> => {
+    const registry = new WorkspaceRegistry(makeStore({}));
+    await registry.upsert(record({ id: "a" }));
+    const remove = registry.remove("a");
+    const update = registry.update("a", (current) => ({ ...current, setupState: "done" }));
+    await (updateFirst ? Promise.all([update, remove]) : Promise.all([remove, update]));
+    assert.deepEqual(registry.list(), [], updateFirst ? "update first" : "remove first");
+  };
+  await run(false);
+  await run(true);
+});
