@@ -33,10 +33,14 @@ import type { WorkspaceRecord } from "./workspaces/types";
 import { loadBundle, resolveLanguage, setBundle, t } from "./l10n.ts";
 import {
   CHAT_TABS_KEY,
+  claimChatTabRestore,
   dropChatTab,
+  finishChatTabRestore,
   planRestore,
   pruneChatTabs,
+  protectChatTabId,
   readChatTabs,
+  unprotectChatTabId,
   upsertChatTab,
   type ChatTabPatch,
   type ChatTabRecord,
@@ -290,6 +294,11 @@ export function activate(context: vscode.ExtensionContext): void {
     cwd: string | undefined,
     overrides: SessionOverrides | undefined,
   ): OmpSession {
+    // The id is protected from eviction as soon as the panel has any surface
+    // in the editor. During restore this is already true from
+    // `claimChatTabRestore`; for a fresh tab it keeps the brand-new record
+    // alive while the panel is open.
+    protectChatTabId(tabId);
     // Which branch a tab is editing decides whether its edits are safe, so the
     // branch owns the front of the title and the agent's own `setTitle` is
     // composed after it rather than allowed to replace it.
@@ -364,6 +373,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // reload disposes every panel on its way down, and a store that reacted
       // to that would erase itself moments before the restore reads it.
       panelTabIds.delete(panel);
+      unprotectChatTabId(tabId);
       session.dispose();
     });
     session.attach(panel.webview);
@@ -502,7 +512,21 @@ export function activate(context: vscode.ExtensionContext): void {
         // branch and conversation all live on it and may have moved while this
         // window was down. Restoring from it is what puts the tab back on its
         // board row in the state it had.
-        bindChatPanel(panel, plan.record.tabId, record.worktreePath, workspaceOverrides(record));
+        if (!claimChatTabRestore(plan.record.tabId)) {
+          // Another restore or an already-bound panel owns this id now.
+          panel.dispose();
+          return;
+        }
+        let bound = false;
+        try {
+          bindChatPanel(panel, plan.record.tabId, record.worktreePath, workspaceOverrides(record));
+          bound = true;
+        } finally {
+          finishChatTabRestore(plan.record.tabId);
+          if (!bound) {
+            unprotectChatTabId(plan.record.tabId);
+          }
+        }
         return;
       }
       case "plain": {
@@ -513,13 +537,27 @@ export function activate(context: vscode.ExtensionContext): void {
           yieldToLivePanel(sameTab, panel);
           return;
         }
-        bindChatPanel(panel, plan.record.tabId, plan.record.cwd, {
-          // Only what the tab actually pinned. A tab that never picked a model
-          // has no `model` here and goes on following `ompcode.defaultModel`,
-          // exactly as it did before the reload.
-          ...(plan.record.model ? { model: plan.record.model } : {}),
-          ...(plan.record.sessionFile ? { sessionFile: plan.record.sessionFile } : {}),
-        });
+        if (!claimChatTabRestore(plan.record.tabId)) {
+          // Another restore or an already-bound panel owns this id now.
+          panel.dispose();
+          return;
+        }
+        let bound = false;
+        try {
+          bindChatPanel(panel, plan.record.tabId, plan.record.cwd, {
+            // Only what the tab actually pinned. A tab that never picked a model
+            // has no `model` here and goes on following `ompcode.defaultModel`,
+            // exactly as it did before the reload.
+            ...(plan.record.model ? { model: plan.record.model } : {}),
+            ...(plan.record.sessionFile ? { sessionFile: plan.record.sessionFile } : {}),
+          });
+          bound = true;
+        } finally {
+          finishChatTabRestore(plan.record.tabId);
+          if (!bound) {
+            unprotectChatTabId(plan.record.tabId);
+          }
+        }
         return;
       }
       case "close":

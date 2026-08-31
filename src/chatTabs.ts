@@ -56,6 +56,58 @@ export type ChatTabPatch = Partial<Omit<ChatTabRecord, "tabId" | "updatedAt">> &
   tabId: string;
 };
 
+/**
+ * Tab ids whose records must survive eviction because their webview panel is
+ * still open or is about to be bound. This is the explicit protection the
+ * restore path needs: a panel VS Code hands to the serializer is open from the
+ * user's point of view, but it has not reached `bindChatPanel` yet, so the set
+ * of currently bound panels alone cannot keep it safe.
+ */
+const protectedTabIds = new Set<string>();
+
+/** Mark a tab id as protected from eviction while its panel is open. */
+export function protectChatTabId(tabId: string): void {
+  protectedTabIds.add(tabId);
+}
+
+/** Remove eviction protection for a closed/disposed tab. */
+export function unprotectChatTabId(tabId: string): void {
+  protectedTabIds.delete(tabId);
+}
+
+/** Clear the protection registry. Intended for tests. */
+export function resetChatTabProtection(): void {
+  protectedTabIds.clear();
+}
+
+/**
+ * Tab ids currently being restored. VS Code deserializes persisted webview
+ * panels lazily, and a panel whose state names the same tab id can arrive
+ * twice (e.g. a second deserialize for the same persisted surface, or a race
+ * with normal activation that already started binding that id). Only one of
+ * those paths may be allowed to call `bindChatPanel`.
+ */
+const restoringTabIds = new Set<string>();
+
+/**
+ * Try to take ownership of restoring a tab id. Returns `true` if the caller
+ * is now responsible for that id; `false` if it is already bound, already
+ * protected, or another restore is in progress.
+ */
+export function claimChatTabRestore(tabId: string): boolean {
+  if (protectedTabIds.has(tabId) || restoringTabIds.has(tabId)) {
+    return false;
+  }
+  restoringTabIds.add(tabId);
+  protectedTabIds.add(tabId);
+  return true;
+}
+
+/** Release the in-progress restore flag; the id stays protected if still open. */
+export function finishChatTabRestore(tabId: string): void {
+  restoringTabIds.delete(tabId);
+}
+
 function optionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
@@ -134,7 +186,7 @@ export function upsertChatTab(
   const kept: ChatTabRecord[] = [];
   let over = next.length - MAX_CHAT_TABS;
   for (const record of next) {
-    if (over > 0 && !keep.has(record.tabId)) {
+    if (over > 0 && !keep.has(record.tabId) && !protectedTabIds.has(record.tabId)) {
       over -= 1;
       continue;
     }

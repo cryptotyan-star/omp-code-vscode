@@ -6,12 +6,17 @@ import { fileURLToPath } from "node:url";
 import {
   CHAT_TABS_KEY,
   MAX_CHAT_TABS,
+  claimChatTabRestore,
   dropChatTab,
+  finishChatTabRestore,
   isChatTabRecord,
   parseTabState,
   planRestore,
   pruneChatTabs,
+  protectChatTabId,
   readChatTabs,
+  resetChatTabProtection,
+  unprotectChatTabId,
   upsertChatTab,
   type ChatTabRecord,
 } from "../src/chatTabs.ts";
@@ -142,6 +147,51 @@ test("dropping a tab leaves the others alone", () => {
     ["b"],
   );
   assert.equal(dropChatTab(list, "missing").length, 2);
+});
+
+/* ------------------------------------------------------------------ */
+/* Eviction protection                                                  */
+/* ------------------------------------------------------------------ */
+
+test("a protected tab record survives eviction pressure", () => {
+  resetChatTabProtection();
+  protectChatTabId("victim");
+  let list = upsertChatTab([], { tabId: "victim", sessionFile: "/v.jsonl" }, 0);
+  for (let i = 0; i < MAX_CHAT_TABS + 5; i += 1) {
+    list = upsertChatTab(list, { tabId: `tab-${i}` }, i + 1);
+  }
+  assert.ok(list.some((r) => r.tabId === "victim"));
+  unprotectChatTabId("victim");
+});
+
+test("a tab stays protected even when the caller forgets the keep set", () => {
+  resetChatTabProtection();
+  protectChatTabId("victim");
+  let list = upsertChatTab([], { tabId: "victim", sessionFile: "/v.jsonl" }, 0);
+  for (let i = 0; i < MAX_CHAT_TABS + 5; i += 1) {
+    // No keep set passed: the global protection is what keeps it alive.
+    list = upsertChatTab(list, { tabId: `tab-${i}` }, i + 1);
+  }
+  assert.ok(list.some((r) => r.tabId === "victim"));
+  unprotectChatTabId("victim");
+});
+
+/* ------------------------------------------------------------------ */
+/* Restore deduplication                                                */
+/* ------------------------------------------------------------------ */
+
+test("a second restore for the same tab id is rejected", () => {
+  resetChatTabProtection();
+  assert.ok(claimChatTabRestore("shared"));
+  assert.ok(!claimChatTabRestore("shared"), "duplicate restore must be rejected");
+  finishChatTabRestore("shared");
+  // The tab id is still protected, so a new claim still fails.
+  assert.ok(!claimChatTabRestore("shared"));
+  unprotectChatTabId("shared");
+  // Once unprotected, the id can be restored again.
+  assert.ok(claimChatTabRestore("shared"));
+  finishChatTabRestore("shared");
+  unprotectChatTabId("shared");
 });
 
 /* ------------------------------------------------------------------ */
@@ -352,6 +402,27 @@ test("a restored panel never becomes a second agent in one worktree", () => {
     plainBranch.indexOf("panelForTab(plan.record.tabId)") < plainBranch.indexOf("bindChatPanel("),
     "the plain branch binds before it checks for a live panel",
   );
+});
+
+test("the restore path claims the tab id before it binds", () => {
+  // A duplicate deserialize for the same persisted surface, or a normal-
+  // activation race, must not be allowed to call `bindChatPanel` twice.
+  const restore = extensionSrc.slice(
+    extensionSrc.indexOf("function restoreChatTab("),
+    extensionSrc.indexOf("function deliverPrompt("),
+  );
+  assert.match(restore, /claimChatTabRestore\(plan\.record\.tabId\)/);
+  assert.match(restore, /finishChatTabRestore\(plan\.record\.tabId\)/);
+});
+
+test("binding a panel protects its record and disposing unprotects it", () => {
+  const bind = extensionSrc.slice(
+    extensionSrc.indexOf("function bindChatPanel("),
+    extensionSrc.indexOf("function openChatTab("),
+  );
+  assert.match(bind, /protectChatTabId\(tabId\)/);
+  const dispose = bind.slice(bind.indexOf("panel.onDidDispose"));
+  assert.match(dispose, /unprotectChatTabId\(tabId\)/);
 });
 
 test("a workspace that vanished behind the extension's back takes its tabs with it", () => {
