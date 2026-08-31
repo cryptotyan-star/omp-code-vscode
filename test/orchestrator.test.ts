@@ -617,3 +617,56 @@ test("delete without force refuses when the workspace's state cannot be read", a
   await assert.rejects(() => h.orchestrator.remove({ id: "a" }), /force=true/);
   assert.equal(h.removed.length, 0);
 });
+
+// ------------------------------------------------------- create serialization
+
+test("concurrent creates run one at a time, in arrival order", async () => {
+  const h = harness();
+  await Promise.all([
+    h.orchestrator.create({ name: "a", prompt: "go" }),
+    h.orchestrator.create({ name: "b", prompt: "go" }),
+    h.orchestrator.create({ name: "c", prompt: "go" }),
+  ]);
+  assert.deepEqual(
+    h.created.map((c) => c.opts["name"]),
+    ["a", "b", "c"],
+    "each create must see the previous one's row before deciding",
+  );
+});
+
+test("a double-started name fails at the manager and does not wedge the chain", async () => {
+  // Two creates with the same name from one fan-out are two links on the
+  // chain: the second reaches a manager that already holds the first's
+  // checkout, the way git holds a duplicate branch. That rejection must not
+  // stop the creates queued behind it — the chain swallows the failure and
+  // keeps moving.
+  const seen: string[] = [];
+  const records: WorkspaceRecord[] = [];
+  const manager = {
+    list: () => [...records],
+    onDidChange: () => ({ dispose: () => {} }),
+    create: async (_repoRoot: string, opts: Record<string, unknown>) => {
+      const name = String(opts["name"]);
+      seen.push(name);
+      if (records.some((r) => r.name === name)) {
+        throw new Error(`a branch named omp/${name} already exists`);
+      }
+      const next = record(name);
+      records.push(next);
+      return next;
+    },
+  } as unknown as WorkspaceManager; // the same structural fake the harness itself casts
+  const h = harness({ manager });
+
+  const [first, dup] = await Promise.allSettled([
+    h.orchestrator.create({ name: "dup", prompt: "go" }),
+    h.orchestrator.create({ name: "dup", prompt: "go" }),
+  ]);
+  assert.equal(first.status, "fulfilled");
+  assert.equal(dup.status, "rejected");
+  assert.match((dup as PromiseRejectedResult).reason.message, /already exists/);
+
+  const after = await h.orchestrator.create({ name: "next", prompt: "go" });
+  assert.equal(after.name, "next", "the chain survived the rejected link");
+  assert.deepEqual(seen, ["dup", "dup", "next"]);
+});

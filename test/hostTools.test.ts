@@ -884,3 +884,145 @@ test("abortAll leaves the bridge usable, unlike dispose", async () => {
   assert.ok(after, "abortAll retired the bridge; a restarted agent would get nothing");
   assert.notEqual(after.isError, true);
 });
+
+// ------------------------------------------------- malformed handler results
+//
+// The bridge's one invariant is "exactly one structured result per call", and
+// a handler that resolves to the wrong shape used to break it silently: the
+// naive `result.text` access threw inside the fulfillment handler, which the
+// same .then's rejection path cannot catch, so the call never settled at all.
+
+test("a handler that resolves to undefined is answered, not left hanging", async () => {
+  // The handler itself resolves to nothing — not the orchestrator method
+  // under it, whose failure the rejection path already answers.
+  const io = makeIo();
+  const handlers = buildWorkspaceHostTools(makeOrchestrator());
+  handlers[1].run = async () => {};
+  const bridge = new HostToolBridge(handlers, io);
+  bridge.handleCall(call({ id: "f" }));
+  await settle();
+  const results = io.results();
+  assert.equal(results.length, 1, "the call must settle exactly once");
+  assert.equal(results[0].isError, true);
+  const text = io.textOf(results[0]);
+  assert.match(text, /workspace_list/);
+  assert.match(text, /workspace_list to see the current state/, "the error must name a way forward");
+  assert.ok(io.logs.some((l) => l.includes("unusable result")), "the host log records what happened");
+});
+
+test("a handler that resolves to null is answered the same way", async () => {
+  const io = makeIo();
+  const handlers = buildWorkspaceHostTools(makeOrchestrator());
+  handlers[1].run = async () => null;
+  const bridge = new HostToolBridge(handlers, io);
+  bridge.handleCall(call({ id: "f" }));
+  await settle();
+  assert.equal(io.results().length, 1);
+  assert.equal(io.results()[0].isError, true);
+  assert.match(io.textOf(io.results()[0]), /produced no result/);
+});
+
+test("a result whose text is not a string is refused, not sent as malformed JSON", async () => {
+  // A tool result needs a non-empty text block; `{ text: 42 }` would make omp
+  // build one from a number.
+  const io = makeIo();
+  const handlers = buildWorkspaceHostTools(makeOrchestrator());
+  handlers[1].run = async () => ({ text: 42 });
+  const bridge = new HostToolBridge(handlers, io);
+  bridge.handleCall(call({ id: "f" }));
+  await settle();
+  assert.equal(io.results().length, 1);
+  assert.equal(io.results()[0].isError, true);
+  assert.match(io.textOf(io.results()[0]), /produced an empty result/);
+});
+
+test("an oversized result is cut at the ceiling and told how to narrow the next call", async () => {
+  // A diff that ignored its maxBytes budget is the realistic way a huge text
+  // arrives here; the bridge is the last ceiling before the RPC transport.
+  const { io, bridge } = makeBridge({
+    async diff() {
+      return { status: status(), text: "x".repeat(300_000), truncated: false };
+    },
+  });
+  bridge.handleCall(call({ id: "f", toolName: "workspace_diff", arguments: { id: "ws-1" } }));
+  await settle();
+  const results = io.results();
+  assert.equal(results.length, 1);
+  const text = io.textOf(results[0]);
+  assert.ok(text.startsWith("workspace: auth-jwt"), "the leading content survives");
+  assert.match(text, /truncated by the host at 256000 characters/);
+  assert.ok(text.length < 300_000);
+  assert.notEqual(results[0].isError, true, "truncating a success keeps it a success");
+  assert.deepEqual(results[0].result.details, { status: status(), truncated: false }, "details pass through whole");
+});
+
+test("an oversized progress update is clamped too", async () => {
+  const { io, bridge } = makeBridge({
+    async wait(a) {
+      a.onProgress([status({ name: "y".repeat(300_000) })]);
+      return { statuses: [status()], timedOut: false };
+    },
+  });
+  bridge.handleCall(call({ id: "f", toolName: "workspace_wait", arguments: {} }));
+  await settle();
+  const text = io.updates()[0].partialResult.content[0].text;
+  assert.ok(text.length < 300_000);
+  assert.match(text, /truncated by the host/);
+});
+
+test("null, string and array arguments all reach the handler as no arguments", async () => {
+  const io = makeIo();
+  const seen = [];
+  const handlers = buildWorkspaceHostTools(makeOrchestrator());
+  handlers[1].run = async (args) => {
+    seen.push(args);
+    return { text: "ok" };
+  };
+  const bridge = new HostToolBridge(handlers, io);
+  bridge.handleCall(call({ id: "f1", arguments: null }));
+  bridge.handleCall(call({ id: "f2", arguments: "nonsense" }));
+  bridge.handleCall(call({ id: "f3", arguments: ["a", "b"] }));
+  await settle();
+  assert.deepEqual(seen, [{}, {}, {}], "a string or array would otherwise arrive as index keys");
+  assert.equal(io.results().length, 3);
+});
+
+test("a non-object arguments frame still names the field the tool needs", async () => {
+  const { io, bridge } = makeBridge();
+  bridge.handleCall(call({ id: "f", toolName: "workspace_create", arguments: "nonsense" }));
+  await settle();
+  assert.equal(io.results()[0].isError, true);
+  const text = io.textOf(io.results()[0]);
+  assert.match(text, /workspace_create/);
+  assert.match(text, /"name"/, "the fix is the missing field, not the frame's shape");
+});
+
+// --------------------------------------------------------- path redaction
+
+test("an error quoting a host path reaches the model redacted", async () => {
+  const { io, bridge } = makeBridge({
+    async merge() {
+      throw new Error("fatal: '/Users/someone/Desktop/repo.worktrees/auth-jwt' already exists");
+    },
+  });
+  bridge.handleCall(call({ id: "f", toolName: "workspace_merge", arguments: { id: "ws-1" } }));
+  await settle();
+  const text = io.textOf(io.results()[0]);
+  assert.match(text, /^workspace_merge failed: /, "the tool is named first");
+  assert.ok(!text.includes("/Users/someone"), "the model has no use for the user's home directory");
+  assert.match(text, /<host path>/);
+});
+
+test("a windows host path is redacted, and repo-relative paths stay readable", async () => {
+  const { io, bridge } = makeBridge({
+    async verify() {
+      throw new Error("C:\\Users\\someone\\repo\\node_modules is corrupt; failing in src/auth.ts");
+    },
+  });
+  bridge.handleCall(call({ id: "f", toolName: "workspace_verify", arguments: { id: "ws-1" } }));
+  await settle();
+  const text = io.textOf(io.results()[0]);
+  assert.ok(!text.includes("C:\\Users"));
+  assert.match(text, /<host path>/);
+  assert.ok(text.includes("src/auth.ts"), "repo-relative paths are the actionable part");
+});
