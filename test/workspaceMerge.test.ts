@@ -722,3 +722,144 @@ test("discarding an untracked directory removes it rather than throwing", { skip
   await discardWorkspaceFile(one.path, f.baseSha, "scratch");
   await assert.rejects(fs.stat(path.join(one.path, "scratch")));
 });
+
+// ------------------------------------------------------------ concurrency ----
+
+test("concurrent merges in one repository are serialized and both land", { skip }, async (t) => {
+  const f = await makeRepo();
+  t.after(() => fs.rm(f.tmp, { recursive: true, force: true }));
+  const one = await addWorkspace(f, "one");
+  const two = await addWorkspace(f, "two");
+  await write(one.path, "a.txt", "ONE\na2\na3\n");
+  await commitAll(one.path, "one");
+  await write(two.path, "b.txt", "TWO\nb2\nb3\n");
+  await commitAll(two.path, "two");
+
+  // Whoever runs second finds the base has moved — overridable, so both
+  // succeed whichever order the repository lock picks.
+  const results = await Promise.all([
+    mergeWorkspace({
+      repoRoot: f.repo,
+      worktreePath: one.path,
+      branch: one.branch,
+      baseRef: "main",
+      baseSha: f.baseSha,
+      strategy: "merge",
+      force: true,
+    }),
+    mergeWorkspace({
+      repoRoot: f.repo,
+      worktreePath: two.path,
+      branch: two.branch,
+      baseRef: "main",
+      baseSha: f.baseSha,
+      strategy: "merge",
+      force: true,
+    }),
+  ]);
+
+  assert.equal(results[0]!.merged, true, results[0]!.message);
+  assert.equal(results[1]!.merged, true, results[1]!.message);
+  assert.equal(await read(f.repo, "a.txt"), "ONE\na2\na3\n");
+  assert.equal(await read(f.repo, "b.txt"), "TWO\nb2\nb3\n");
+});
+
+
+test("concurrent merges without override land exactly one, and leave no merge behind", { skip }, async (t) => {
+  const f = await makeRepo();
+  t.after(() => fs.rm(f.tmp, { recursive: true, force: true }));
+  const one = await addWorkspace(f, "one");
+  const two = await addWorkspace(f, "two");
+  await write(one.path, "a.txt", "ONE\na2\na3\n");
+  await commitAll(one.path, "one");
+  await write(two.path, "b.txt", "TWO\nb2\nb3\n");
+  await commitAll(two.path, "two");
+
+  const results = await Promise.all([
+    mergeWorkspace({
+      repoRoot: f.repo,
+      worktreePath: one.path,
+      branch: one.branch,
+      baseRef: "main",
+      baseSha: f.baseSha,
+      strategy: "merge",
+    }),
+    mergeWorkspace({
+      repoRoot: f.repo,
+      worktreePath: two.path,
+      branch: two.branch,
+      baseRef: "main",
+      baseSha: f.baseSha,
+      strategy: "merge",
+    }),
+  ]);
+
+  // Which one won is the lock's choice; that exactly one did, that the other
+  // refused without touching anything, and that main is not left mid-merge
+  // are the invariants.
+  const winners = results.filter((r) => r.merged);
+  assert.equal(winners.length, 1);
+  const refused = results.find((r) => !r.merged)!;
+  assert.match(refused.message, /Nothing was changed/);
+  const a = await read(f.repo, "a.txt");
+  const b = await read(f.repo, "b.txt");
+  assert.ok(a.startsWith("ONE") !== b.startsWith("TWO"), "exactly one workspace's work landed");
+  const midMerge = await git(["rev-parse", "--quiet", "--verify", "MERGE_HEAD"], { cwd: f.repo }).then(
+    () => true,
+    () => false,
+  );
+  assert.equal(midMerge, false, "main is left mid-merge");
+});
+
+
+test("merging a workspace that was deleted is a clean refusal, not a crash", { skip }, async (t) => {
+  const f = await makeRepo();
+  t.after(() => fs.rm(f.tmp, { recursive: true, force: true }));
+  const gone = await addWorkspace(f, "gone");
+  await write(gone.path, "a.txt", "GONE\na2\na3\n");
+  await commitAll(gone.path, "work");
+  await git(["worktree", "remove", "--force", gone.path], { cwd: f.repo });
+  await git(["branch", "-D", gone.branch], { cwd: f.repo });
+
+  const result = await mergeWorkspace({
+    repoRoot: f.repo,
+    worktreePath: gone.path,
+    branch: gone.branch,
+    baseRef: "main",
+    baseSha: f.baseSha,
+    strategy: "merge",
+  });
+
+  assert.equal(result.merged, false);
+  assert.match(result.message, /branch no longer exists/);
+  assert.equal(await head(f.repo), (await git(["rev-parse", "main"], { cwd: f.repo })).stdout.trim());
+});
+
+
+test("concurrent merges in different repositories do not block each other", { skip }, async (t) => {
+  const f1 = await makeRepo();
+  const f2 = await makeRepo();
+  t.after(() => Promise.all([fs.rm(f1.tmp, { recursive: true, force: true }), fs.rm(f2.tmp, { recursive: true, force: true })]));
+  const one = await addWorkspace(f1, "one");
+  await write(one.path, "a.txt", "ONE\na2\na3\n");
+  await commitAll(one.path, "one");
+  const two = await addWorkspace(f2, "two");
+  await write(two.path, "a.txt", "TWO\na2\na3\n");
+  await commitAll(two.path, "two");
+
+  const merge = (f: Fixture, ws: { path: string; branch: string }) =>
+    mergeWorkspace({
+      repoRoot: f.repo,
+      worktreePath: ws.path,
+      branch: ws.branch,
+      baseRef: "main",
+      baseSha: f.baseSha,
+      strategy: "merge",
+    });
+  const [r1, r2] = await Promise.all([merge(f1, one), merge(f2, two)]);
+
+  assert.equal(r1.merged, true, r1.message);
+  assert.equal(r2.merged, true, r2.message);
+  assert.equal(await read(f1.repo, "a.txt"), "ONE\na2\na3\n");
+  assert.equal(await read(f2.repo, "a.txt"), "TWO\na2\na3\n");
+});

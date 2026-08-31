@@ -63,6 +63,21 @@ const DEFAULT_MAX_FILES = 500;
 
 const DEFAULT_MAX_DIFF_BYTES = 1024 * 1024;
 
+/**
+ * A byte or file limit as a non-negative integer: fractions are floored, a
+ * non-number falls back to the default, and anything below zero clamps to
+ * zero. A negative limit is not "no files, no bytes" downstream — `slice`
+ * would read it as an index from the end and keep all but the last entry, and
+ * `lastIndexOf(LF, -1)` reads as "search from the buffer's end", both silently
+ * inverting the cut they were meant to enforce.
+ */
+function normalizeLimit(requested: number | undefined, fallback: number): number {
+  if (typeof requested !== "number" || !Number.isFinite(requested)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(requested));
+}
+
 const LF = 0x0a;
 
 /**
@@ -273,7 +288,7 @@ export async function workspaceDiff(
   baseSha: string,
   opts?: DiffOptions,
 ): Promise<WorkspaceDiff> {
-  const maxFiles = opts?.maxFiles ?? DEFAULT_MAX_FILES;
+  const maxFiles = normalizeLimit(opts?.maxFiles, DEFAULT_MAX_FILES);
   const exec = (args: string[]) => git(args, { cwd: worktreePath, signal: opts?.signal });
 
   const numstat = await exec(["--no-optional-locks", "diff", "--numstat", "-z", "--find-renames", baseSha, "--"]);
@@ -414,7 +429,7 @@ export async function fileDiff(
   filePath: string,
   opts?: { maxBytes?: number },
 ): Promise<string> {
-  const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_DIFF_BYTES;
+  const maxBytes = normalizeLimit(opts?.maxBytes, DEFAULT_MAX_DIFF_BYTES);
   const relative = toPosix(filePath);
 
   if (await isTracked(worktreePath, relative)) {
@@ -437,22 +452,36 @@ async function isTracked(worktreePath: string, relativePath: string): Promise<bo
 }
 
 /**
- * Cut an oversized diff, always on a line boundary — which also guarantees the
- * cut never lands inside a multi-byte character, since a newline is its own
- * byte. The marker is left in English on purpose: it sits inside git's own
- * untranslated output, where a localised line would read as part of the diff.
+ * Cut an oversized diff, on a line boundary when one fits — which also
+ * guarantees the cut never lands inside a multi-byte character, since a
+ * newline is its own byte. The marker is left in English on purpose: it sits
+ * inside git's own untranslated output, where a localised line would read as
+ * part of the diff. `maxBytes` arrives already normalised
+ * ({@link normalizeLimit}), so zero is a real answer here: a budget of zero
+ * keeps no bytes but still says so — the marker line is the whole result.
  */
 function truncateDiff(text: string, maxBytes: number): string {
   const buffer = Buffer.from(text, "utf8");
   if (buffer.length <= maxBytes) {
     return text;
   }
-  let cut = buffer.lastIndexOf(LF, maxBytes - 1);
-  if (cut < 0) {
-    cut = maxBytes - 1;
+  let end = 0;
+  if (maxBytes > 0) {
+    // The newline is included: ending just before one would spend the budget
+    // on a partial line when a whole one fits.
+    const newline = buffer.lastIndexOf(LF, maxBytes - 1);
+    end = newline >= 0 ? newline + 1 : maxBytes;
   }
-  const head = buffer.subarray(0, cut + 1).toString("utf8");
-  return `${head}*** diff truncated at ${cut + 1} of ${buffer.length} bytes ***\n`;
+  // A single line longer than the whole budget — minified output, a generated
+  // blob, a path-heavy header — leaves no boundary to land on, so the cut is
+  // mid-line. Never mid-character though: while the first *excluded* byte is a
+  // UTF-8 continuation byte the boundary splits a code point, and decoding the
+  // head would end it in a stray U+FFFD.
+  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  const head = buffer.subarray(0, end).toString("utf8");
+  return `${head}*** diff truncated at ${end} of ${buffer.length} bytes ***\n`;
 }
 
 /**
