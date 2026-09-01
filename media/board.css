@@ -1,0 +1,219 @@
+/* Process board (ompcode.board). Sidebar-only port of
+   docs/design/process-board.mock.html — the row with the top-edge stripe is
+   the one signature. VS Code injects the real --vscode-* values as inline
+   properties on <html>; the fallbacks below only matter outside VS Code.
+   Values: Light Modern / Dark Modern. */
+:root {
+  color-scheme: light dark;
+  --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, Ubuntu, "Droid Sans", sans-serif;
+  --vscode-editor-font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
+  --vscode-foreground: #3b3b3b;
+  --vscode-descriptionForeground: #616161;
+  --vscode-disabledForeground: #a0a0a0;
+  --vscode-sideBar-background: #f8f8f8;
+  --vscode-sideBarTitle-foreground: #3b3b3b;
+  --vscode-sideBarSectionHeader-background: #f8f8f8;
+  --vscode-sideBarSectionHeader-border: #e5e5e5;
+  --vscode-panel-border: #e5e5e5;
+  --vscode-list-hoverBackground: #f2f2f2;
+  --vscode-tree-indentGuidesStroke: #a9a9a9;
+  --vscode-focusBorder: #005fb8;
+  --vscode-badge-background: #cccccc;
+  --vscode-badge-foreground: #3b3b3b;
+  --vscode-scrollbarSlider-background: rgba(100,100,100,.4);
+  --vscode-toolbar-hoverBackground: rgba(184,184,184,.31);
+  --vscode-testing-iconPassed: #388a34;
+
+  /* OMP semantic layer — the only place state colors are decided. A custom
+     ompcode.accentColor lands on --omp-accent/--omp-run/--omp-glow through the
+     CSSOM in board.mjs (CSP forbids inline <style>). */
+  --omp-accent: #6F5CE8;          /* brand violet, light-tuned */
+  --omp-run: #7B68F0;
+  --omp-ok: var(--vscode-testing-iconPassed);
+  --omp-err: #8E1F1F;             /* тёмно-красный */
+  --omp-err-text: #8E1F1F;
+  --omp-wait: var(--vscode-descriptionForeground);
+  --omp-glow: rgba(123,104,240,.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --vscode-foreground: #cccccc;
+    --vscode-descriptionForeground: #9d9d9d;
+    --vscode-disabledForeground: #6f6f6f;
+    --vscode-sideBar-background: #181818;
+    --vscode-sideBarTitle-foreground: #cccccc;
+    --vscode-sideBarSectionHeader-background: #181818;
+    --vscode-sideBarSectionHeader-border: #2b2b2b;
+    --vscode-panel-border: #2b2b2b;
+    --vscode-list-hoverBackground: #2a2d2e;
+    --vscode-tree-indentGuidesStroke: #585858;
+    --vscode-focusBorder: #0078d4;
+    --vscode-badge-background: #616161;
+    --vscode-badge-foreground: #f8f8f8;
+    --vscode-scrollbarSlider-background: rgba(121,121,121,.4);
+    --vscode-toolbar-hoverBackground: rgba(90,93,94,.31);
+    --vscode-testing-iconPassed: #73c991;
+
+    --omp-accent: #8B7BF7;
+    --omp-run: #8B7BF7;
+    --omp-err: #A32C2C;
+    --omp-err-text: #f0a9a3;
+    --omp-glow: rgba(139,123,247,.45);
+  }
+}
+:root[data-theme="dark"] {
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-disabledForeground: #6f6f6f;
+  --vscode-sideBar-background: #181818;
+  --vscode-sideBarTitle-foreground: #cccccc;
+  --vscode-sideBarSectionHeader-background: #181818;
+  --vscode-sideBarSectionHeader-border: #2b2b2b;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-tree-indentGuidesStroke: #585858;
+  --vscode-focusBorder: #0078d4;
+  --vscode-badge-background: #616161;
+  --vscode-badge-foreground: #f8f8f8;
+  --vscode-scrollbarSlider-background: rgba(121,121,121,.4);
+  --vscode-toolbar-hoverBackground: rgba(90,93,94,.31);
+  --vscode-testing-iconPassed: #73c991;
+
+  --omp-accent: #8B7BF7;
+  --omp-run: #8B7BF7;
+  --omp-err: #A32C2C;
+  --omp-err-text: #f0a9a3;
+  --omp-glow: rgba(139,123,247,.45);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background); }
+.mono { font-family: var(--vscode-editor-font-family); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+.board { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+
+.section {
+  height: 22px; padding: 0 8px 0 4px;
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
+  background: var(--vscode-sideBarSectionHeader-background);
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+  color: var(--vscode-sideBarTitle-foreground);
+  user-select: none;
+}
+.section .chev { width: 16px; height: 16px; display: grid; place-items: center; }
+.section .chev svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.section .grow { flex: 1; }
+.section .count {
+  min-width: 18px; height: 16px; padding: 0 5px; border-radius: 8px;
+  font-size: 10px; font-weight: 600; line-height: 16px; text-align: center;
+  background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
+}
+.section .count.err { background: var(--omp-err); color: #fff; }
+
+.tree { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+
+/* row: flat, native list feel; stripe on the top edge is the one signature.
+   --c comes from the state class, --p and --indent arrive through the CSSOM
+   (CSP forbids style attributes) — board.mjs sets them from data-p/data-ind. */
+.row {
+  position: relative;
+  width: 100%; text-align: left;
+  padding: 7px 10px 6px var(--indent, 12px);
+  display: grid; grid-template-columns: 16px 1fr auto; column-gap: 6px; row-gap: 1px;
+  align-items: center;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  overflow: hidden;
+}
+.row:hover { background: var(--vscode-list-hoverBackground); }
+.row.child::before { /* indent guide */
+  content: ""; position: absolute; left: 20px; top: 0; bottom: 0; width: 1px;
+  background: var(--vscode-tree-indentGuidesStroke); opacity: .5;
+}
+
+/* The state classes own --c: one semantic color per bar. */
+.is-running { --c: var(--omp-run); }
+.is-done { --c: var(--omp-ok); }
+.is-error, .is-budget { --c: var(--omp-err); }
+.is-waiting { --c: var(--omp-wait); }
+.is-idle { --c: var(--vscode-descriptionForeground); }
+
+.stripe { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: color-mix(in srgb, var(--c) 18%, transparent); }
+.stripe > i { display: block; height: 100%; width: var(--p, 0%); background: var(--c); position: relative; transition: width .6s cubic-bezier(.2,.7,.2,1); }
+.is-running .stripe > i::after { /* Magic UI shimmer */
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.6), transparent);
+  background-size: 120px 100%; animation: sheen 1.5s linear infinite;
+}
+.is-running .stripe { box-shadow: 0 0 8px var(--omp-glow); }
+.is-done .stripe > i, .is-error .stripe > i, .is-budget .stripe > i { width: 100%; }
+.is-waiting .stripe > i { width: 100%; opacity: .75; background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 10px); }
+@keyframes sheen { from { background-position: -120px 0; } to { background-position: 240px 0; } }
+
+.ico { position: relative; width: 16px; height: 16px; grid-row: 1 / span 2; color: var(--c); display: grid; place-items: center; }
+.ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.is-running .ico svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Only a person can move this row on — a small accent dot says so. */
+.needs-human .ico::after {
+  content: ""; position: absolute; right: -2px; top: -2px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--omp-accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: .3; } }
+
+.row .name { grid-column: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .name .who { color: var(--vscode-descriptionForeground); }
+.row .sub { grid-column: 2; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 5px; }
+.row .sub b { font-weight: 600; color: var(--c); }
+.row .sub .cost { color: var(--vscode-descriptionForeground); }
+.row .sub .cost.over { color: var(--omp-err-text); font-weight: 600; }
+.row .time { grid-column: 3; grid-row: 1; font-size: 11px; color: var(--vscode-descriptionForeground); }
+.ticks { grid-column: 3; grid-row: 2; display: flex; gap: 2px; justify-self: end; }
+.ticks span { width: 9px; height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent); }
+.ticks span.hit { background: var(--c); }
+.is-error .ticks span.hit { background: color-mix(in srgb, var(--omp-err) 55%, transparent); }
+.is-error .ticks span.bad { background: var(--omp-err); }
+
+/* A quiet row: no stripe fill, everything one notch dimmer. */
+.is-idle, .is-idle .sub, .is-idle .time { color: var(--vscode-descriptionForeground); }
+
+/* Per-row hover actions: stop / delete. They float over the clock. */
+.acts { position: absolute; top: 4px; right: 6px; display: none; gap: 2px; background: var(--vscode-sideBar-background); border-radius: 4px; }
+.row:hover .acts, .row:focus-within .acts { display: flex; }
+.acts .act { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 3px; font-size: 11px; line-height: 1; color: var(--vscode-descriptionForeground); }
+.acts .act:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+.acts .act[data-act="delete"]:hover { color: var(--omp-err-text); }
+
+.empty { padding: 24px 16px; text-align: center; color: var(--vscode-descriptionForeground); }
+.empty .empty-title { margin-bottom: 4px; }
+.empty .empty-sub { font-size: 11px; color: var(--vscode-disabledForeground); }
+
+.sb-foot {
+  border-top: 1px solid var(--vscode-panel-border);
+  padding: 6px 10px; display: flex; gap: 6px; align-items: center;
+  font-size: 11px; color: var(--vscode-descriptionForeground);
+}
+.sb-foot .total.over { color: var(--omp-err-text); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .is-running .stripe > i::after, .is-running .ico svg, .needs-human .ico::after { animation: none; }
+  .stripe > i { transition: none; }
+}
