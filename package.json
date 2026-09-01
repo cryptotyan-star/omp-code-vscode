@@ -37,6 +37,7 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onView:ompcode.chat",
+    "onView:ompcode.board",
     "onWebviewPanel:ompcode.chatTab"
   ],
   "contributes": {
@@ -55,6 +56,11 @@
           "type": "webview",
           "id": "ompcode.chat",
           "name": "%view.chat.name%"
+        },
+        {
+          "type": "webview",
+          "id": "ompcode.board",
+          "name": "%view.board.name%"
         },
         {
           "id": "ompcode.sessions",
@@ -585,6 +591,18 @@
           "minimum": 1,
           "maximum": 20,
           "markdownDescription": "%config.orchestratorMaxWorkspaces.markdownDescription%"
+        },
+        "ompcode.costLimitPerWorkspaceUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "%config.costLimitPerWorkspaceUsd.markdownDescription%"
+        },
+        "ompcode.costLimitPerSessionUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "%config.costLimitPerSessionUsd.markdownDescription%"
         }
       }
     }

@@ -1,6 +1,7 @@
 {
   "extension.description": "Claude Code-style chat GUI in the sidebar, backed by the omp (oh-my-pi) CLI over RPC. Supports custom model providers and the Anthropic Cloud API.",
   "view.chat.name": "Chat",
+  "view.board.name": "Processes",
   "view.sessions.name": "Sessions",
   "view.review.name": "Review",
   "command.openChat.title": "OMP Code: Open Chat (Editor)",
@@ -86,5 +87,7 @@
   "config.portScanIgnore.markdownDescription": "TCP ports the port scanner never shows.",
   "config.reviewAutoRefresh.markdownDescription": "Recount a workspace's changes when its worktree is written to. Off, the Review view only recounts when you refresh it — quieter on a huge repository, at the cost of numbers that lag behind the agent.",
   "config.orchestratorTools.markdownDescription": "Give the main chat the tools to run workspaces itself: create one on a named model, wait for it, read its diff, merge the one that won, delete the rest. On, one sentence — \"try this on GLM and on Sonnet, then show me both diffs\" — is the whole instruction: the chat cuts the worktrees, starts the agents, waits, and reports back. Off, workspaces stay something you drive by hand from the `Sessions` view; nothing already created is affected.\n\nA workspace's own agent never receives these tools, whatever this is set to — a worker that could create workers would fork worktrees until the disk filled. The tool list is declared once, at agent startup, so changing this restarts the running agents.\n\nWhat this runs on your machine: `workspace_verify` executes the command the repository itself declares — `verify` in `.ompcode/workspace.json`, otherwise its `test`, `check` or `build` script — or another npm script the chat names, inside that workspace's worktree, with the editor's own environment and with no approval prompt. The chat cannot compose a shell command of its own; a workspace agent that edits `.ompcode/workspace.json` can, however, change what that declared command is.",
+  "config.costLimitPerWorkspaceUsd.markdownDescription": "Stop a workspace's agent once its session has spent this many dollars. 0 = no limit.",
+  "config.costLimitPerSessionUsd.markdownDescription": "Refuse new work once the orchestrator and all its workspaces together have spent this many dollars. 0 = no limit.",
   "config.orchestratorMaxWorkspaces.markdownDescription": "How many workspaces the chat may keep at once. `workspace_create` refuses past this number, naming the limit and this setting, so a model that keeps starting workers instead of finishing them runs into a wall rather than into the disk: each workspace is a full checkout on disk and a metered agent in memory. Workspaces you created by hand count too. Raise it only if the machine can carry that many builds at once."
 }

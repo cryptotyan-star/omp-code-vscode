@@ -132,6 +132,10 @@ const HOST_ONLY_SETTINGS = [
   // deliberately NOT here: it is announced to the agent at handshake, so it
   // does need the restart.
   "orchestratorMaxWorkspaces",
+  // Cost ceilings are read by the orchestration facade on each create/prompt
+  // tick; changing a limit must not restart agents mid-turn.
+  "costLimitPerWorkspaceUsd",
+  "costLimitPerSessionUsd",
 ] as const;
 
 /**

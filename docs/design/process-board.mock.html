@@ -1,0 +1,689 @@
+<meta charset="utf-8">
+<title>OMP Process Board</title>
+<style>
+  /* ── VS Code theme tokens. In the real webview VS Code injects --vscode-* on <html>
+     (inline style beats these), so the fallbacks below only matter outside VS Code.
+     Values: Light Modern / Dark Modern. ─────────────────────────────────────── */
+  :root {
+    color-scheme: light dark;
+    --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, Ubuntu, "Droid Sans", sans-serif;
+    --vscode-editor-font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    --vscode-foreground: #3b3b3b;
+    --vscode-descriptionForeground: #616161;
+    --vscode-disabledForeground: #a0a0a0;
+    --vscode-editor-background: #ffffff;
+    --vscode-sideBar-background: #f8f8f8;
+    --vscode-sideBarTitle-foreground: #3b3b3b;
+    --vscode-sideBarSectionHeader-background: #f8f8f8;
+    --vscode-sideBarSectionHeader-border: #e5e5e5;
+    --vscode-activityBar-background: #f8f8f8;
+    --vscode-activityBar-foreground: #1f1f1f;
+    --vscode-activityBar-inactiveForeground: #616161;
+    --vscode-activityBar-activeBorder: #005fb8;
+    --vscode-activityBarBadge-background: #005fb8;
+    --vscode-activityBarBadge-foreground: #ffffff;
+    --vscode-panel-border: #e5e5e5;
+    --vscode-widget-border: #e5e5e5;
+    --vscode-list-hoverBackground: #f2f2f2;
+    --vscode-list-activeSelectionBackground: #e8e8e8;
+    --vscode-list-activeSelectionForeground: #000000;
+    --vscode-list-inactiveSelectionBackground: #e4e6f1;
+    --vscode-tree-indentGuidesStroke: #a9a9a9;
+    --vscode-focusBorder: #005fb8;
+    --vscode-button-background: #005fb8;
+    --vscode-button-foreground: #ffffff;
+    --vscode-button-secondaryBackground: #e5e5e5;
+    --vscode-button-secondaryForeground: #3b3b3b;
+    --vscode-badge-background: #cccccc;
+    --vscode-badge-foreground: #3b3b3b;
+    --vscode-input-background: #ffffff;
+    --vscode-input-border: #cecece;
+    --vscode-input-placeholderForeground: #767676;
+    --vscode-tab-activeBackground: #ffffff;
+    --vscode-tab-inactiveBackground: #f8f8f8;
+    --vscode-tab-activeForeground: #3b3b3b;
+    --vscode-tab-inactiveForeground: #6f6f6f;
+    --vscode-tab-border: #e5e5e5;
+    --vscode-editorGroupHeader-tabsBackground: #f8f8f8;
+    --vscode-breadcrumb-foreground: #616161;
+    --vscode-statusBar-background: #f8f8f8;
+    --vscode-statusBar-foreground: #3b3b3b;
+    --vscode-statusBar-border: #e5e5e5;
+    --vscode-statusBarItem-errorBackground: #c72e0f;
+    --vscode-statusBarItem-errorForeground: #ffffff;
+    --vscode-statusBarItem-hoverBackground: rgba(0,0,0,.08);
+    --vscode-textCodeBlock-background: #f3f3f3;
+    --vscode-textLink-foreground: #005fb8;
+    --vscode-testing-iconPassed: #388a34;
+    --vscode-testing-iconFailed: #e51400;
+    --vscode-editorWarning-foreground: #bf8803;
+    --vscode-inputValidation-errorBackground: #f2dede;
+    --vscode-inputValidation-errorBorder: #be1100;
+    --vscode-charts-purple: #652d90;
+    --vscode-scrollbarSlider-background: rgba(100,100,100,.4);
+    --vscode-toolbar-hoverBackground: rgba(184,184,184,.31);
+
+    /* OMP semantic layer — the only place state colors are decided */
+    --omp-accent: #6F5CE8;          /* brand violet, light-tuned */
+    --omp-run: #7B68F0;
+    --omp-ok: var(--vscode-testing-iconPassed);
+    --omp-err: #8E1F1F;             /* тёмно-красный */
+    --omp-err-text: #8E1F1F;
+    --omp-wait: var(--vscode-descriptionForeground);
+    --omp-glow: rgba(123,104,240,.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --vscode-foreground: #cccccc;
+      --vscode-descriptionForeground: #9d9d9d;
+      --vscode-disabledForeground: #6f6f6f;
+      --vscode-editor-background: #1f1f1f;
+      --vscode-sideBar-background: #181818;
+      --vscode-sideBarTitle-foreground: #cccccc;
+      --vscode-sideBarSectionHeader-background: #181818;
+      --vscode-sideBarSectionHeader-border: #2b2b2b;
+      --vscode-activityBar-background: #181818;
+      --vscode-activityBar-foreground: #d7d7d7;
+      --vscode-activityBar-inactiveForeground: #868686;
+      --vscode-activityBar-activeBorder: #0078d4;
+      --vscode-activityBarBadge-background: #0078d4;
+      --vscode-panel-border: #2b2b2b;
+      --vscode-widget-border: #313131;
+      --vscode-list-hoverBackground: #2a2d2e;
+      --vscode-list-activeSelectionBackground: #04395e;
+      --vscode-list-activeSelectionForeground: #ffffff;
+      --vscode-list-inactiveSelectionBackground: #37373d;
+      --vscode-tree-indentGuidesStroke: #585858;
+      --vscode-focusBorder: #0078d4;
+      --vscode-button-background: #0078d4;
+      --vscode-button-secondaryBackground: #313131;
+      --vscode-button-secondaryForeground: #cccccc;
+      --vscode-badge-background: #616161;
+      --vscode-badge-foreground: #f8f8f8;
+      --vscode-input-background: #313131;
+      --vscode-input-border: #3c3c3c;
+      --vscode-input-placeholderForeground: #989898;
+      --vscode-tab-activeBackground: #1f1f1f;
+      --vscode-tab-inactiveBackground: #181818;
+      --vscode-tab-activeForeground: #ffffff;
+      --vscode-tab-inactiveForeground: #9d9d9d;
+      --vscode-tab-border: #2b2b2b;
+      --vscode-editorGroupHeader-tabsBackground: #181818;
+      --vscode-breadcrumb-foreground: #a9a9a9;
+      --vscode-statusBar-background: #181818;
+      --vscode-statusBar-foreground: #cccccc;
+      --vscode-statusBar-border: #2b2b2b;
+      --vscode-statusBarItem-hoverBackground: rgba(255,255,255,.12);
+      --vscode-textCodeBlock-background: #262626;
+      --vscode-textLink-foreground: #4daafc;
+      --vscode-testing-iconPassed: #73c991;
+      --vscode-testing-iconFailed: #f14c4c;
+      --vscode-editorWarning-foreground: #cca700;
+      --vscode-inputValidation-errorBackground: #5a1d1d;
+      --vscode-inputValidation-errorBorder: #be1100;
+      --vscode-charts-purple: #b180d7;
+      --vscode-scrollbarSlider-background: rgba(121,121,121,.4);
+      --vscode-toolbar-hoverBackground: rgba(90,93,94,.31);
+
+      --omp-accent: #8B7BF7;
+      --omp-run: #8B7BF7;
+      --omp-err: #A32C2C;
+      --omp-err-text: #f0a9a3;
+      --omp-glow: rgba(139,123,247,.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --vscode-foreground: #cccccc;
+    --vscode-descriptionForeground: #9d9d9d;
+    --vscode-disabledForeground: #6f6f6f;
+    --vscode-editor-background: #1f1f1f;
+    --vscode-sideBar-background: #181818;
+    --vscode-sideBarTitle-foreground: #cccccc;
+    --vscode-sideBarSectionHeader-background: #181818;
+    --vscode-sideBarSectionHeader-border: #2b2b2b;
+    --vscode-activityBar-background: #181818;
+    --vscode-activityBar-foreground: #d7d7d7;
+    --vscode-activityBar-inactiveForeground: #868686;
+    --vscode-activityBar-activeBorder: #0078d4;
+    --vscode-activityBarBadge-background: #0078d4;
+    --vscode-panel-border: #2b2b2b;
+    --vscode-widget-border: #313131;
+    --vscode-list-hoverBackground: #2a2d2e;
+    --vscode-list-activeSelectionBackground: #04395e;
+    --vscode-list-activeSelectionForeground: #ffffff;
+    --vscode-list-inactiveSelectionBackground: #37373d;
+    --vscode-tree-indentGuidesStroke: #585858;
+    --vscode-focusBorder: #0078d4;
+    --vscode-button-background: #0078d4;
+    --vscode-button-secondaryBackground: #313131;
+    --vscode-button-secondaryForeground: #cccccc;
+    --vscode-badge-background: #616161;
+    --vscode-badge-foreground: #f8f8f8;
+    --vscode-input-background: #313131;
+    --vscode-input-border: #3c3c3c;
+    --vscode-input-placeholderForeground: #989898;
+    --vscode-tab-activeBackground: #1f1f1f;
+    --vscode-tab-inactiveBackground: #181818;
+    --vscode-tab-activeForeground: #ffffff;
+    --vscode-tab-inactiveForeground: #9d9d9d;
+    --vscode-tab-border: #2b2b2b;
+    --vscode-editorGroupHeader-tabsBackground: #181818;
+    --vscode-breadcrumb-foreground: #a9a9a9;
+    --vscode-statusBar-background: #181818;
+    --vscode-statusBar-foreground: #cccccc;
+    --vscode-statusBar-border: #2b2b2b;
+    --vscode-statusBarItem-hoverBackground: rgba(255,255,255,.12);
+    --vscode-textCodeBlock-background: #262626;
+    --vscode-textLink-foreground: #4daafc;
+    --vscode-testing-iconPassed: #73c991;
+    --vscode-testing-iconFailed: #f14c4c;
+    --vscode-editorWarning-foreground: #cca700;
+    --vscode-inputValidation-errorBackground: #5a1d1d;
+    --vscode-inputValidation-errorBorder: #be1100;
+    --vscode-charts-purple: #b180d7;
+    --vscode-scrollbarSlider-background: rgba(121,121,121,.4);
+    --vscode-toolbar-hoverBackground: rgba(90,93,94,.31);
+
+    --omp-accent: #8B7BF7;
+    --omp-run: #8B7BF7;
+    --omp-err: #A32C2C;
+    --omp-err-text: #f0a9a3;
+    --omp-glow: rgba(139,123,247,.45);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--vscode-editor-background);
+    color: var(--vscode-foreground);
+    font-family: var(--vscode-font-family);
+    font-size: 13px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background); }
+  .mono { font-family: var(--vscode-editor-font-family); }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* ── window frame ─────────────────────────────────────────────────────── */
+  .window {
+    display: grid;
+    grid-template-columns: 48px 300px 1fr;
+    grid-template-rows: 1fr 22px;
+    height: 100vh;
+    min-height: 560px;
+  }
+  .activity {
+    background: var(--vscode-activityBar-background);
+    border-right: 1px solid var(--vscode-panel-border);
+    display: flex; flex-direction: column; align-items: center;
+    padding-top: 2px;
+  }
+  .activity button {
+    width: 48px; height: 48px;
+    display: grid; place-items: center;
+    color: var(--vscode-activityBar-inactiveForeground);
+    position: relative;
+  }
+  .activity button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .activity button.on { color: var(--vscode-activityBar-foreground); }
+  .activity button.on::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--omp-accent); }
+  .activity .badge {
+    position: absolute; right: 8px; bottom: 8px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; font-size: 9px; font-weight: 600; line-height: 16px; text-align: center;
+    background: var(--omp-err); color: #fff;
+  }
+  .activity .grow { flex: 1; }
+
+  /* ── side bar ─────────────────────────────────────────────────────────── */
+  .sidebar {
+    background: var(--vscode-sideBar-background);
+    border-right: 1px solid var(--vscode-panel-border);
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .sb-title {
+    height: 35px; padding: 0 20px; display: flex; align-items: center; gap: 8px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--vscode-sideBarTitle-foreground);
+  }
+  .sb-title .grow { flex: 1; }
+  .sb-title .act { color: var(--vscode-descriptionForeground); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; }
+  .sb-title .act:hover { background: var(--vscode-toolbar-hoverBackground); }
+  .sb-title .act svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+
+  .section {
+    height: 22px; padding: 0 8px 0 4px;
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
+    background: var(--vscode-sideBarSectionHeader-background);
+    border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+    color: var(--vscode-sideBarTitle-foreground);
+    user-select: none;
+  }
+  .section .chev { width: 16px; height: 16px; display: grid; place-items: center; }
+  .section .chev svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  .section .grow { flex: 1; }
+  .section .count {
+    min-width: 18px; height: 16px; padding: 0 5px; border-radius: 8px;
+    font-size: 10px; font-weight: 600; line-height: 16px; text-align: center;
+    background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
+  }
+  .section .count.err { background: var(--omp-err); color: #fff; }
+
+  .tree { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+
+  /* row: flat, native list feel; stripe on the top edge is the one signature */
+  .row {
+    position: relative;
+    width: 100%; text-align: left;
+    padding: 7px 10px 6px var(--indent, 12px);
+    display: grid; grid-template-columns: 16px 1fr auto; column-gap: 6px; row-gap: 1px;
+    align-items: center;
+    color: var(--vscode-foreground);
+    overflow: hidden;
+    --mx: -200px; --my: -200px;
+  }
+  .row:hover { background: var(--vscode-list-hoverBackground); }
+  .row[aria-current="true"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+  .row[aria-current="true"] .sub, .row[aria-current="true"] .time { color: inherit; opacity: .75; }
+  .row.child::before { /* indent guide */
+    content: ""; position: absolute; left: 20px; top: 0; bottom: 0; width: 1px;
+    background: var(--vscode-tree-indentGuidesStroke); opacity: .5;
+  }
+  /* Aceternity-style spotlight: radial light that follows the cursor, very quiet */
+  .row::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(180px circle at var(--mx) var(--my), color-mix(in srgb, var(--c) 14%, transparent), transparent 60%);
+    opacity: 0; transition: opacity .2s;
+  }
+  .row:hover::after { opacity: 1; }
+
+  .stripe { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: color-mix(in srgb, var(--c) 18%, transparent); }
+  .stripe > i { display: block; height: 100%; width: var(--p, 0%); background: var(--c); position: relative; transition: width .6s cubic-bezier(.2,.7,.2,1); }
+  .is-running .stripe > i::after { /* Magic UI shimmer */
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.6), transparent);
+    background-size: 120px 100%; animation: sheen 1.5s linear infinite;
+  }
+  .is-running .stripe { box-shadow: 0 0 8px var(--omp-glow); }
+  .is-done .stripe > i, .is-error .stripe > i { width: 100%; }
+  .is-waiting .stripe > i { width: 100%; opacity: .75; background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 10px); }
+  @keyframes sheen { from { background-position: -120px 0; } to { background-position: 240px 0; } }
+
+  .ico { width: 16px; height: 16px; grid-row: 1 / span 2; color: var(--c); display: grid; place-items: center; }
+  .ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .is-running .ico svg { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .row .name { grid-column: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .name .who { color: var(--vscode-descriptionForeground); }
+  .row .sub { grid-column: 2; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 5px; }
+  .row .sub b { font-weight: 600; color: var(--c); }
+  .row .time { grid-column: 3; grid-row: 1; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .ticks { grid-column: 3; grid-row: 2; display: flex; gap: 2px; justify-self: end; }
+  .ticks span { width: 9px; height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent); }
+  .ticks span.hit { background: var(--c); }
+  .is-error .ticks span.hit { background: color-mix(in srgb, var(--omp-err) 55%, transparent); }
+  .is-error .ticks span.bad { background: var(--omp-err); }
+
+  .sb-foot {
+    border-top: 1px solid var(--vscode-panel-border);
+    padding: 6px 10px; display: flex; gap: 6px; align-items: center;
+    font-size: 11px; color: var(--vscode-descriptionForeground);
+  }
+  .sb-foot .grow { flex: 1; }
+  .vbtn { padding: 3px 10px; border-radius: 2px; font-size: 12px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .vbtn.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .vbtn:hover { filter: brightness(1.08); }
+
+  /* ── editor group ─────────────────────────────────────────────────────── */
+  .editor { display: flex; flex-direction: column; min-width: 0; background: var(--vscode-editor-background); }
+  .tabs { height: 35px; display: flex; background: var(--vscode-editorGroupHeader-tabsBackground); border-bottom: 1px solid var(--vscode-tab-border); overflow-x: auto; }
+  .tab {
+    position: relative; height: 35px; padding: 0 12px 0 10px;
+    display: flex; align-items: center; gap: 7px; white-space: nowrap;
+    border-right: 1px solid var(--vscode-tab-border);
+    background: var(--vscode-tab-inactiveBackground); color: var(--vscode-tab-inactiveForeground);
+    font-size: 13px;
+  }
+  .tab.on { background: var(--vscode-tab-activeBackground); color: var(--vscode-tab-activeForeground); }
+  .tab .stripe { height: 2px; }
+  .tab .tico { width: 14px; height: 14px; color: var(--c); }
+  .tab .tico svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .tab .x { width: 16px; height: 16px; border-radius: 3px; display: grid; place-items: center; opacity: 0; color: inherit; }
+  .tab:hover .x, .tab.on .x { opacity: .8; }
+  .tab .x:hover { background: var(--vscode-toolbar-hoverBackground); }
+  .tab .x svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+
+  .crumbs { height: 22px; padding: 0 16px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--vscode-breadcrumb-foreground); border-bottom: 1px solid var(--vscode-panel-border); }
+  .crumbs .sep { opacity: .5; }
+  .crumbs .state { color: var(--c); font-weight: 600; }
+
+  .stages { display: flex; padding: 8px 16px 0; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .stages span { flex: 1; padding: 4px 0 6px; text-align: center; border-bottom: 2px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); letter-spacing: .02em; }
+  .stages span.hit { border-bottom-color: var(--c); color: var(--vscode-foreground); }
+  .stages span.now { color: var(--c); font-weight: 600; }
+  .stages span.bad { border-bottom-color: var(--omp-err); color: var(--omp-err-text); font-weight: 600; }
+
+  .log { flex: 1; overflow-y: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 10px; max-width: 780px; }
+  .msg { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: start; }
+  .msg .k { font-size: 11px; color: var(--vscode-descriptionForeground); padding-top: 2px; }
+  .msg p { margin: 0 0 4px; max-width: 68ch; }
+  .tool {
+    font-family: var(--vscode-editor-font-family); font-size: 12px;
+    background: var(--vscode-textCodeBlock-background);
+    border-left: 2px solid var(--omp-accent);
+    padding: 6px 10px; white-space: pre-wrap; word-break: break-word;
+  }
+  .tool.ok { border-left-color: var(--omp-ok); }
+  .tool.bad { border-left-color: var(--omp-err); color: var(--omp-err-text); }
+  .tool .dim { color: var(--vscode-descriptionForeground); }
+
+  /* Magic UI "animated shiny text" for the live thinking line */
+  .shiny {
+    display: inline-block; font-size: 12px; color: var(--vscode-descriptionForeground);
+    background: linear-gradient(90deg, var(--vscode-descriptionForeground) 0 40%, var(--omp-accent) 50%, var(--vscode-descriptionForeground) 60% 100%);
+    background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shine 2.4s linear infinite;
+  }
+  @keyframes shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+  .callout {
+    position: relative;
+    border: 1px solid color-mix(in srgb, var(--cc) 50%, transparent);
+    background: color-mix(in srgb, var(--cc) 8%, transparent);
+    padding: 8px 10px; display: flex; gap: 10px; align-items: center;
+    overflow: hidden;
+  }
+  .callout p { margin: 0; }
+  /* Magic UI border-beam: one bright point travelling the border of the thing that needs a human */
+  .callout.beam::before {
+    content: ""; position: absolute; inset: -1px; pointer-events: none;
+    background: conic-gradient(from var(--a, 0deg), transparent 0 80%, var(--cc) 92%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    padding: 1px; animation: beam 3s linear infinite;
+  }
+  @property --a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  @keyframes beam { to { --a: 360deg; } }
+
+  .composer {
+    margin: 0 16px 10px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background);
+    display: grid; grid-template-rows: auto auto; max-width: 780px;
+  }
+  .composer .in { padding: 9px 12px; color: var(--vscode-input-placeholderForeground); }
+  .composer .bar { display: flex; align-items: center; gap: 6px; padding: 0 8px 8px; flex-wrap: wrap; }
+  .chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--vscode-widget-border); color: var(--vscode-descriptionForeground); }
+  .chip.access { border-color: var(--vscode-editorWarning-foreground); color: var(--vscode-editorWarning-foreground); }
+  .composer .send { margin-left: auto; width: 24px; height: 24px; border-radius: 12px; background: var(--omp-accent); color: #fff; display: grid; place-items: center; }
+  .composer .send svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+  /* ── status bar ───────────────────────────────────────────────────────── */
+  .status {
+    grid-column: 1 / -1;
+    background: var(--vscode-statusBar-background); color: var(--vscode-statusBar-foreground);
+    border-top: 1px solid var(--vscode-statusBar-border);
+    display: flex; align-items: stretch; font-size: 12px;
+  }
+  .status .it { display: flex; align-items: center; gap: 5px; padding: 0 7px; white-space: nowrap; }
+  .status .it:hover { background: var(--vscode-statusBarItem-hoverBackground); }
+  .status .it.err { background: var(--vscode-statusBarItem-errorBackground); color: var(--vscode-statusBarItem-errorForeground); }
+  .status .it .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+  .status .it.run .d { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .status .grow { flex: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .is-running .stripe > i::after, .is-running .ico svg, .shiny, .callout.beam::before, .status .it.run .d { animation: none; }
+    .stripe > i { transition: none; }
+  }
+  @media (max-width: 760px) {
+    .window { grid-template-columns: 48px 1fr; grid-template-rows: auto 1fr 22px; }
+    .sidebar { grid-column: 2; max-height: 46vh; border-right: 0; border-bottom: 1px solid var(--vscode-panel-border); }
+    .editor { grid-column: 2; }
+    .activity { grid-row: 1 / span 2; }
+  }
+</style>
+
+<div class="window">
+  <nav class="activity" aria-label="Activity bar">
+    <button class="on" title="OMP Code" id="ab-omp" type="button">
+      <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+    </button>
+    <button title="Explorer" type="button"><svg viewBox="0 0 24 24"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg></button>
+    <button title="Search" type="button"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>
+    <button title="Source Control" type="button"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-12 2-12 5"/></svg></button>
+    <span class="grow"></span>
+    <button title="Accounts" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="4"/><path d="M4 20c1.5-4 5-5 8-5s6.5 1 8 5"/></svg></button>
+  </nav>
+
+  <aside class="sidebar">
+    <div class="sb-title">
+      <span>OMP Code</span>
+      <span class="grow"></span>
+      <button class="act" title="Новый воркспейс" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button class="act" title="Обновить" type="button"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg></button>
+    </div>
+    <div class="section" id="sec-orch">
+      <span class="chev"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
+      <span>Оркестратор</span>
+      <span class="grow"></span>
+    </div>
+    <div id="orch"></div>
+    <div class="section">
+      <span class="chev"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
+      <span>Процессы</span>
+      <span class="grow"></span>
+      <span class="count" id="cnt-all">4</span>
+      <span class="count err" id="cnt-err" hidden>0</span>
+    </div>
+    <div class="tree" id="tree" role="listbox" aria-label="Процессы"></div>
+    <div class="sb-foot">
+      <span id="clock">демо</span>
+      <span class="grow"></span>
+      <button class="vbtn" id="reset" type="button">Сначала</button>
+      <button class="vbtn primary" id="play" type="button">Пауза</button>
+    </div>
+  </aside>
+
+  <section class="editor" id="editor" aria-live="polite"></section>
+
+  <footer class="status" id="status"></footer>
+</div>
+
+<script>
+(() => {
+  const STAGES = ['создание', 'работа', 'diff', 'verify', 'merge'];
+  const COLORS = { running: 'var(--omp-run)', done: 'var(--omp-ok)', error: 'var(--omp-err)', waiting: 'var(--omp-wait)' };
+  const LABEL  = { running: 'работает', done: 'готово', error: 'ошибка', waiting: 'ждёт ответа' };
+  const ICON = {
+    running: '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 1-6.4 2.6"/></svg>',
+    done:    '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+    error:   '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+    waiting: '<svg viewBox="0 0 24 24"><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1 1-1.1 1.8"/><path d="M12 17h.01"/></svg>',
+  };
+
+  const procs = [
+    { id: 'fable', parent: true, name: 'Fable', who: 'оркестратор', model: 'anthropic/claude-fable-5', state: 'running', stage: 1, t: 1472, tok: 54100, usd: 26.40,
+      log: [
+        ['fable', 'Четыре воркспейса запущены, все на baseRef 882ef9b. Жду батчем.'],
+        ['tool', 'workspace_wait ["ws-1","ws-2","ws-3","ws-4"]\n<span class="dim">→ ws-3 idle · ws-1 idle · ws-2, ws-4 still running</span>'],
+        ['fable', 'kimi-chattab-restore готов — иду в diff → verify, остальных не жду.'],
+      ] },
+    { id: 'ws-1', name: 'glm-orchestrator-audit', model: 'zhipu-coding-plan/glm-5.2', state: 'running', stage: 3, t: 1101, tok: 18200, usd: 0.31,
+      log: [
+        ['agent', 'Я GLM-5.2. Читаю src/orchestrator.ts и src/hostTools.ts.'],
+        ['tool', 'workspace_diff ws-1\n<span class="dim">→ 4 files, +212 −38 · merges cleanly</span>'],
+        ['tool', 'workspace_verify ws-1 script="test"\n<span class="dim">→ running npm run test …</span>'],
+      ] },
+    { id: 'ws-2', name: 'qwen-workspace-race', model: 'dashscope/qwen3.8-max', state: 'error', stage: 1, t: 312, tok: 900, usd: 0.02,
+      log: [
+        ['agent', '—'],
+        ['tool bad', 'POST dashscope.aliyuncs.com/compatible-mode/v1\n400 Access denied, please make sure your account is in good standing. (type=Arrearage param=Arrearage)'],
+      ] },
+    { id: 'ws-3', name: 'kimi-chattab-restore', model: 'dashscope/kimi-k2.7-code', state: 'done', stage: 4, t: 1388, tok: 22800, usd: 0.44,
+      log: [
+        ['agent', 'Я Kimi K2.7. Дедуп restoreChatTab и защита record eviction готовы, тесты добавлены.'],
+        ['tool ok', 'workspace_verify ws-3 script="test"\n<span class="dim">→ exit 0 · 616 passed</span>'],
+        ['tool ok', 'workspace_merge ws-3\n<span class="dim">→ landed 4bcf3f5 on steer-in-chat</span>'],
+      ] },
+    { id: 'ws-4', name: 'glm-review-subagents', model: 'zhipu-coding-plan/glm-5.2', state: 'waiting', stage: 1, t: 940, tok: 6100, usd: 0.11,
+      log: [
+        ['agent', 'Я GLM-5.2. В REMOTE_HOST_BUGS.md описан баг single-host arbitration. Только привести документ в порядок или сразу чинить в remoteControlService.ts?'],
+      ] },
+  ];
+
+  let selected = 'ws-1';
+  let playing = true;
+  let tick = 0;
+  const shown = { tok: 0, usd: 0 }; // number-ticker state
+
+  const fmt = s => `${Math.floor(s / 60)}м ${String(s % 60).padStart(2, '0')}с`;
+  const kids = () => procs.filter(p => !p.parent);
+  const progressOf = p => {
+    if (p.state !== 'running') return 100;
+    if (p.parent) return Math.round(kids().filter(k => k.state === 'done').length / kids().length * 100);
+    const creep = ((tick % 40) / 40) * (1 / STAGES.length) * .85;
+    return Math.round((p.stage / STAGES.length + creep) * 100);
+  };
+
+  function rowHtml(p) {
+    const c = COLORS[p.state];
+    const done = kids().filter(k => k.state === 'done').length;
+    const sub = p.parent ? `${done} из ${kids().length} смержено`
+      : p.state === 'done' ? 'смержено'
+      : p.state === 'error' ? `упал на «${STAGES[p.stage]}»`
+      : p.state === 'waiting' ? 'вопрос человеку'
+      : `этап: ${STAGES[p.stage]}`;
+    const ticks = p.parent ? '' : `<span class="ticks">${STAGES.map((_, i) =>
+      `<span class="${p.state === 'error' && i === p.stage ? 'bad' : i <= p.stage ? 'hit' : ''}"></span>`).join('')}</span>`;
+    return `<button class="row ${p.parent ? '' : 'child'} is-${p.state}" style="--c:${c};--p:${progressOf(p)}%;${p.parent ? '' : '--indent:30px'}" data-id="${p.id}" role="option" aria-current="${selected === p.id}" aria-label="${p.name}, ${LABEL[p.state]}">
+      <span class="stripe"><i></i></span>
+      <span class="ico">${ICON[p.state]}</span>
+      <span class="name">${p.name}${p.who ? ` <span class="who">· ${p.who}</span>` : ''}</span>
+      <span class="sub" title="${p.model}"><b>${LABEL[p.state]}</b>·<span>${sub}</span></span>
+      <span class="time tnum mono">${fmt(p.t)}</span>
+      ${ticks}
+    </button>`;
+  }
+
+  function renderSidebar() {
+    document.getElementById('orch').innerHTML = rowHtml(procs[0]);
+    document.getElementById('tree').innerHTML = kids().map(rowHtml).join('');
+    document.querySelectorAll('.row').forEach(el => {
+      el.addEventListener('click', () => { selected = el.dataset.id; render(); });
+      el.addEventListener('mousemove', e => { const r = el.getBoundingClientRect(); el.style.setProperty('--mx', (e.clientX - r.left) + 'px'); el.style.setProperty('--my', (e.clientY - r.top) + 'px'); });
+    });
+    const err = kids().filter(k => k.state === 'error').length + kids().filter(k => k.state === 'waiting').length;
+    document.getElementById('cnt-all').textContent = kids().length;
+    const ce = document.getElementById('cnt-err'); ce.hidden = err === 0; ce.textContent = err;
+    const ab = document.getElementById('ab-omp');
+    let b = ab.querySelector('.badge');
+    if (err && !b) { b = document.createElement('span'); b.className = 'badge'; ab.appendChild(b); }
+    if (b) { if (err) b.textContent = err; else b.remove(); }
+  }
+
+  function renderEditor() {
+    const p = procs.find(x => x.id === selected);
+    const c = COLORS[p.state];
+    const tabs = procs.map(q => `<button class="tab ${q.id === selected ? 'on' : ''} is-${q.state}" style="--c:${COLORS[q.state]};--p:${progressOf(q)}%" data-id="${q.id}" type="button">
+        <span class="stripe"><i></i></span>
+        <span class="tico">${ICON[q.state]}</span><span>${q.name}</span>
+        <span class="x"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+      </button>`).join('');
+    const stages = p.parent ? '' : `<div class="stages" style="--c:${c}">${STAGES.map((s, i) =>
+      `<span class="${p.state === 'error' && i === p.stage ? 'bad' : i < p.stage ? 'hit' : i === p.stage ? 'hit now' : ''}">${s}</span>`).join('')}</div>`;
+    const log = p.log.map(([k, b]) => k.startsWith('tool')
+      ? `<div class="msg"><span class="k">tool</span><div class="${k}">${b}</div></div>`
+      : `<div class="msg"><span class="k">${k}</span><div><p>${b}</p></div></div>`).join('');
+    const live = p.state === 'running' ? `<div class="msg"><span class="k"></span><span class="shiny">Thinking · ${STAGES[p.stage]}…</span></div>` : '';
+    const callout = p.state === 'error'
+      ? `<div class="callout beam" style="--cc:var(--omp-err)"><p>Провайдер отклонил запрос: аккаунт DashScope в долге. Пополни баланс и повтори — ключ и model id менять не нужно.</p><button class="vbtn" type="button" data-retry="${p.id}">Повторить</button></div>`
+      : p.state === 'waiting'
+      ? `<div class="callout beam" style="--cc:var(--omp-accent)"><p>Агент остановился и ждёт ответа. Пока не ответишь — воркспейс стоит.</p><button class="vbtn primary" type="button" data-answer="${p.id}">Ответить</button></div>`
+      : '';
+    document.getElementById('editor').innerHTML = `
+      <div class="tabs">${tabs}</div>
+      <div class="crumbs" style="--c:${c}"><span>steer-in-chat</span><span class="sep">›</span><span>${p.parent ? 'оркестратор' : 'ws/' + p.name}</span><span class="sep">›</span><span class="mono">${p.model}</span><span class="sep">›</span><span class="state">${LABEL[p.state]}</span></div>
+      ${stages}
+      <div class="log">${log}${live}${callout}</div>
+      <div class="composer">
+        <div class="in">${p.parent ? 'Ask OMP Code…' : 'Написать агенту…'}</div>
+        <div class="bar">
+          <span class="chip">${p.model.split('/')[1]}</span>
+          <span class="chip">think: auto → xhigh</span>
+          <span class="chip access">access: full</span>
+          <span class="chip tnum">↑164 ↓<span id="tk"></span> $<span id="usd"></span></span>
+          <span class="send"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>
+        </div>
+      </div>`;
+    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => { selected = t.dataset.id; render(); }));
+    document.querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => {
+      const q = procs.find(x => x.id === b.dataset.retry); q.state = 'running'; q.stage = 1; q.t = 0;
+      q.log = [['agent', 'Я Qwen3.8-Max. Повтор после пополнения — читаю src/workspaces/*.']]; render();
+    }));
+    document.querySelectorAll('[data-answer]').forEach(b => b.addEventListener('click', () => {
+      const q = procs.find(x => x.id === b.dataset.answer); q.state = 'running'; q.stage = 1;
+      q.log.push(['fable', 'Только документ. Код remoteControlService.ts не трогать.'], ['agent', 'Понял, привожу REMOTE_HOST_BUGS.md в финальный вид.']); render();
+    }));
+    tickNumbers(p);
+  }
+
+  // Magic UI number-ticker: ease the shown value toward the real one
+  function tickNumbers(p) {
+    shown.tok += (p.tok - shown.tok) * .25;
+    shown.usd += (p.usd - shown.usd) * .25;
+    const tk = document.getElementById('tk'), usd = document.getElementById('usd');
+    if (tk) tk.textContent = shown.tok >= 1000 ? (shown.tok / 1000).toFixed(1) + 'k' : Math.round(shown.tok);
+    if (usd) usd.textContent = shown.usd.toFixed(2);
+  }
+
+  function renderStatus() {
+    const k = kids();
+    const run = k.filter(x => x.state === 'running').length, done = k.filter(x => x.state === 'done').length,
+          err = k.filter(x => x.state === 'error').length, wait = k.filter(x => x.state === 'waiting').length;
+    const pl = (n, one, few, many) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? one : m >= 2 && m <= 4 && (h < 12 || h > 14) ? few : many; };
+    document.getElementById('status').innerHTML = `
+      <span class="it">⎇ steer-in-chat</span>
+      <span class="it run" style="--c:var(--omp-run)"><span class="d"></span>${run} ${pl(run, 'работает', 'работают', 'работают')}</span>
+      <span class="it" style="--c:var(--omp-ok)"><span class="d"></span>${done} ${pl(done, 'готов', 'готовы', 'готовы')}</span>
+      ${wait ? `<span class="it" style="--c:var(--omp-wait)"><span class="d"></span>${wait} ${pl(wait, 'ждёт', 'ждут', 'ждут')}</span>` : ''}
+      ${err ? `<span class="it err" style="--c:#fff"><span class="d"></span>${err} ${pl(err, 'ошибка', 'ошибки', 'ошибок')}</span>` : ''}
+      <span class="grow"></span>
+      <span class="it">Claude Fable 5</span>
+      <span class="it tnum">1631 сессий</span>
+      <span class="it">Remote Control</span>`;
+  }
+
+  function render() { renderSidebar(); renderEditor(); renderStatus(); }
+
+  function step() {
+    if (!playing) return;
+    tick++;
+    for (const p of procs) if (p.state === 'running') {
+      p.t++; p.tok += p.parent ? 12 : 30; p.usd += p.parent ? .004 : .0006;
+      if (!p.parent && tick % 40 === 0) {
+        if (p.stage < STAGES.length - 1) p.stage++;
+        else { p.state = 'done'; p.log.push(['tool ok', `workspace_merge ${p.id}\n<span class="dim">→ landed on steer-in-chat</span>`]); }
+      }
+    }
+    if (kids().every(k => k.state === 'done')) { procs[0].state = 'done'; procs[0].stage = 4; }
+    document.getElementById('clock').textContent = 'демо · ' + fmt(tick);
+    render();
+  }
+
+  document.getElementById('play').addEventListener('click', e => { playing = !playing; e.currentTarget.textContent = playing ? 'Пауза' : 'Играть'; });
+  document.getElementById('reset').addEventListener('click', () => location.reload());
+
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  render();
+  setInterval(step, reduce ? 1000 : 250);
+})();
+</script>
