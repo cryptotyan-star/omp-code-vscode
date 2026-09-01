@@ -4,6 +4,12 @@ import { Orchestrator, type OrchestratorDeps, type WorkspaceStatus } from "../sr
 import type { WorkspaceManager } from "../src/workspaces/manager.ts";
 import type { WorkspaceRecord } from "../src/workspaces/types.ts";
 import type { OmpSession } from "../src/ompSession";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { WorkspaceStatusLike } from "../src/boardTypes.ts";
+import { git } from "../src/workspaces/git.ts";
 
 /**
  * The rules the orchestrator exists to enforce, against fakes: a wait that
@@ -26,10 +32,12 @@ function fakeSession(
   session: OmpSession;
   setStatus(next: BoardStatus): void;
   setPending(next: boolean): void;
+  setCost(next: number): void;
   prompts: { message: string; mode: string }[];
 } {
   let current = status;
   let pending = opts?.pending ?? false;
+  let cost = opts?.cost ?? 0;
   const prompts: { message: string; mode: string }[] = [];
   const session = {
     snapshot: () => ({
@@ -42,7 +50,7 @@ function fakeSession(
       // A real session reports this for the whole life of a turn, including
       // the gap before its first frame arrives — see SessionInfo.pending.
       pending: pending || current === "working",
-      cost: opts?.cost ?? 0,
+      cost,
       subagents: [],
       closable: true,
     }),
@@ -60,6 +68,9 @@ function fakeSession(
     },
     setPending(next: boolean) {
       pending = next;
+    },
+    setCost(next: number) {
+      cost = next;
     },
     prompts,
   };
@@ -670,3 +681,377 @@ test("a double-started name fails at the manager and does not wedge the chain", 
   assert.equal(after.name, "next", "the chain survived the rejected link");
   assert.deepEqual(seen, ["dup", "dup", "next"]);
 });
+
+// ------------------------------------------------------------- pipeline stages
+
+test("a workspace the facade created reports stage and start time", async () => {
+  const h = harness();
+  const before = Date.now();
+  const status = await h.orchestrator.create({ name: "a", prompt: "go" });
+  assert.equal(status.stage, "created", "the first step of the pipeline");
+  assert.ok(typeof status.startedAt === "number" && status.startedAt >= before);
+  const [listed] = await h.orchestrator.list();
+  assert.equal(listed?.stage, "created");
+  assert.equal(listed?.startedAt, status.startedAt, "the start time is stable");
+});
+
+test("a record the facade never created has no stage or start time", async () => {
+  // Stages live in the facade's memory, not in the registry: a workspace that
+  // predates this facade instance has no progress to report.
+  const h = harness();
+  h.records.push(record("old"));
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, undefined);
+  assert.equal(status?.startedAt, undefined);
+});
+
+test("the first working observation advances created to working", async () => {
+  const h = harness();
+  await h.orchestrator.create({ name: "a", prompt: "go" });
+  h.sessions.set("a", fakeSession("working").session);
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, "working");
+});
+
+test("stages never move backwards on a later refresh", async () => {
+  const h = harness();
+  await h.orchestrator.create({ name: "a", prompt: "go" });
+  const session = fakeSession("working");
+  h.sessions.set("a", session.session);
+  await h.orchestrator.list();
+  session.setStatus("idle");
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, "working", "an idle session does not demote the stage");
+});
+
+test("diff, verify and merge advance diffed, verified and merged", async () => {
+  const h = harness();
+  h.records.push(record("a"));
+  h.sessions.set("a", fakeSession("idle").session);
+  const f = await makeStageRepo();
+  h.records[0] = record("a", {
+    repoRoot: f.repo,
+    worktreePath: f.worktree,
+    branch: f.branch,
+    baseSha: f.baseSha,
+  });
+
+  await h.orchestrator.diff({ id: "a" });
+  let [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, "diffed");
+
+  await h.orchestrator.verify({ id: "a", command: "npm run ok" });
+  [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, "verified");
+
+  const result = await h.orchestrator.merge({ id: "a", force: true });
+  assert.equal(result.merged, true, result.message);
+  [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, "merged");
+});
+
+test("a failed verify leaves the stage where it was", async () => {
+  const h = harness();
+  h.records.push(record("a"));
+  h.sessions.set("a", fakeSession("idle").session);
+  const result = await h.orchestrator.verify({ id: "a", command: "npm run nope" });
+  assert.equal(result.ok, false);
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, undefined, "no step of the pipeline was completed");
+});
+
+test("a refused merge leaves the stage where it was", async () => {
+  const h = harness();
+  h.records.push(record("a"));
+  h.sessions.set("a", fakeSession("idle").session);
+  const f = await makeStageRepo({ dirty: false });
+  h.records[0] = record("a", {
+    repoRoot: f.repo,
+    worktreePath: f.worktree,
+    branch: f.branch,
+    baseSha: f.baseSha,
+  });
+
+  await h.orchestrator.diff({ id: "a" });
+  // Nothing to merge — the branch has no commits of its own and the worktree
+  // is clean. The refusal must not advance (or demote) the pipeline stage.
+  const result = await h.orchestrator.merge({ id: "a" });
+  assert.equal(result.merged, false, result.message);
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.stage, "diffed");
+});
+
+test("a deleted workspace takes its stage, start time and abort record with it", async () => {
+  const h = harness();
+  h.records.push(record("a"));
+  h.sessions.set("a", fakeSession("idle").session);
+  const aborted: string[] = [];
+  const limited = harness({
+    costLimits: () => ({ perWorkspaceUsd: 1, perSessionUsd: 0 }),
+    abortTurn: (id) => aborted.push(id),
+  });
+  limited.records.push(record("b"));
+  const spent = fakeSession("idle", { cost: 2 });
+  limited.sessions.set("b", spent.session);
+  await limited.orchestrator.list();
+  assert.equal(aborted.length, 1);
+
+  await limited.orchestrator.remove({ id: "b", force: true });
+  limited.records.push(record("b"));
+  limited.sessions.set("b", spent.session);
+  await limited.orchestrator.list();
+  assert.equal(aborted.length, 2, "a recycled id starts its budget afresh");
+});
+
+test("orchestrator statuses satisfy the board's structural contract", () => {
+  // Compile-time guard: WorkspaceStatus must stay assignable to the board's
+  // WorkspaceStatusLike. The rows below are exactly what list() returns.
+  const rows: WorkspaceStatus[] = [
+    {
+      id: "ws-1",
+      name: "a",
+      branch: "omp/a",
+      worktreePath: "/repo.worktrees/a",
+      model: "dashscope/qwen3.8-max",
+      state: "working",
+      cost: 1,
+      added: 0,
+      deleted: 0,
+      files: 0,
+      setupState: "done",
+      stage: "working",
+      startedAt: 1,
+      costLimitUsd: 2,
+      overBudget: true,
+      lastError: "over",
+    },
+    {
+      id: "ws-2",
+      name: "b",
+      branch: "omp/b",
+      worktreePath: "/repo.worktrees/b",
+      model: "",
+      state: "idle",
+      cost: 0,
+      added: 0,
+      deleted: 0,
+      files: 0,
+      setupState: "done",
+    },
+  ];
+  const like: WorkspaceStatusLike[] = rows;
+  assert.equal(like.length, 2);
+});
+
+// ---------------------------------------------------------------- budgets
+//
+// The two settings arrive through `deps.costLimits`; every test below names
+// them through that callback. No callback, or a limit of 0, means the limit
+// is off and everything must behave exactly as before.
+
+test("an over-budget workspace is flagged and refused at prompt", async () => {
+  const aborted: string[] = [];
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 2, perSessionUsd: 0 }),
+    abortTurn: (id) => aborted.push(id),
+  });
+  h.records.push(record("a", { name: "auth-jwt" }));
+  h.sessions.set("a", fakeSession("idle", { cost: 2.5 }).session);
+
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.overBudget, true);
+  assert.equal(status?.costLimitUsd, 2);
+  assert.match(status?.lastError ?? "", /spent/);
+  assert.deepEqual(aborted, ["a"], "the turn is stopped once, at the first refresh");
+
+  await h.orchestrator.list();
+  assert.equal(aborted.length, 1, "the abort never repeats");
+
+  await assert.rejects(
+    () => h.orchestrator.prompt({ id: "a", message: "carry on" }),
+    (err: Error) => {
+      assert.match(err.message, /workspace auth-jwt spent \$2\.50 of its \$2\.00 limit/);
+      assert.match(err.message, /ompcode\.costLimitPerWorkspaceUsd or delete the workspace/);
+      return true;
+    },
+  );
+  assert.equal(aborted.length, 1, "a refused prompt does not abort again");
+});
+
+test("the first over-budget prompt stops the turn too, exactly once", async () => {
+  // Enforcement runs on every status refresh — the prompt path included — so
+  // an agent that crosses its limit between two lists is stopped there.
+  const aborted: string[] = [];
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 1, perSessionUsd: 0 }),
+    abortTurn: (id) => aborted.push(id),
+  });
+  h.records.push(record("a", { name: "a" }));
+  const fake = fakeSession("idle", { cost: 1.5 });
+  h.sessions.set("a", fake.session);
+  await assert.rejects(
+    () => h.orchestrator.prompt({ id: "a", message: "go on" }),
+    /spent \$1\.50 of its \$1\.00 limit/,
+  );
+  assert.deepEqual(aborted, ["a"]);
+  assert.deepEqual(fake.prompts, [], "nothing was delivered to a spent workspace");
+  await assert.rejects(() => h.orchestrator.prompt({ id: "a", message: "again" }), /limit/);
+  assert.equal(aborted.length, 1);
+});
+
+test("a workspace under its limit is prompted as before", async () => {
+  const aborted: string[] = [];
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 5, perSessionUsd: 0 }),
+    abortTurn: (id) => aborted.push(id),
+  });
+  h.records.push(record("a"));
+  const fake = fakeSession("idle", { cost: 4 });
+  h.sessions.set("a", fake.session);
+  const status = await h.orchestrator.prompt({ id: "a", message: "carry on" });
+  assert.equal(status.overBudget, undefined);
+  assert.deepEqual(aborted, []);
+  assert.equal(fake.prompts.length, 1);
+});
+
+test("an over-session-budget create refuses with the numbers and the setting", async () => {
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 0, perSessionUsd: 10 }),
+    sessionCostUsd: () => 6,
+  });
+  h.records.push(record("a"));
+  h.sessions.set("a", fakeSession("idle", { cost: 4 }).session);
+
+  await assert.rejects(
+    () => h.orchestrator.create({ name: "b", prompt: "do the thing" }),
+    (err: Error) => {
+      assert.match(err.message, /\$10\.00 of its \$10\.00 cost limit/, "total and limit are in the message");
+      assert.match(err.message, /ompcode\.costLimitPerSessionUsd/);
+      return true;
+    },
+  );
+  assert.equal(h.created.length, 0);
+});
+
+test("an over-session-budget prompt refuses, and a wait returns over_budget", async () => {
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 0, perSessionUsd: 10 }),
+    sessionCostUsd: () => 9,
+  });
+  h.records.push(record("busy"));
+  h.sessions.set("busy", fakeSession("working", { cost: 1 }).session);
+
+  await assert.rejects(
+    () => h.orchestrator.prompt({ id: "busy", message: "keep going" }),
+    /ompcode\.costLimitPerSessionUsd/,
+  );
+
+  // A wait past the session budget returns at once — never blocks — and says
+  // so; a model that waited on it would hang on agents that keep working.
+  const started = Date.now();
+  const result = await h.orchestrator.wait({ ids: ["busy"], timeoutMs: 60_000 });
+  assert.equal(result.reason, "over_budget");
+  assert.equal(result.timedOut, false);
+  assert.equal(byId(result.statuses, "busy").state, "working", "the live state is still reported");
+  assert.ok(Date.now() - started < 5000, "the wait returned immediately");
+});
+
+test("the workspace limit refuses before the session limit does", async () => {
+  // Both limits broken at once: the refusal must name the workspace and its
+  // own limit, because that is the one the orchestrating model can act on.
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 1, perSessionUsd: 1 }),
+    sessionCostUsd: () => 5,
+  });
+  h.records.push(record("a", { name: "auth-jwt" }));
+  h.sessions.set("a", fakeSession("idle", { cost: 2 }).session);
+  await assert.rejects(
+    () => h.orchestrator.prompt({ id: "a", message: "go on" }),
+    /workspace auth-jwt spent \$2\.00 of its \$1\.00 limit/,
+  );
+});
+
+test("a workspace with no session costs the session total zero", async () => {
+  // No session means no spend: the total must not refuse a create just
+  // because a worktree exists.
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 0, perSessionUsd: 10 }),
+    sessionCostUsd: () => 0,
+  });
+  h.records.push(record("orphan"));
+  await h.orchestrator.create({ name: "b", prompt: "go" });
+  assert.equal(h.created.length, 1);
+});
+
+test("session totals count every workspace, not just the waited-for ids", async () => {
+  // wait(ids) must still see the whole session's spend: a model waiting on
+  // one workspace while another burns the budget must not get past the gate.
+  const h = harness({
+    costLimits: () => ({ perWorkspaceUsd: 0, perSessionUsd: 5 }),
+    sessionCostUsd: () => 0,
+  });
+  h.records.push(record("a"), record("b"));
+  h.sessions.set("a", fakeSession("idle", { cost: 3 }).session);
+  h.sessions.set("b", fakeSession("working", { cost: 3 }).session);
+  const result = await h.orchestrator.wait({ ids: ["a"], timeoutMs: 1000 });
+  assert.equal(result.reason, "over_budget", "the other workspace's spend counted");
+});
+
+test("limits of zero mean off, and missing callbacks mean no limits", async () => {
+  const zeroed = harness({
+    costLimits: () => ({ perWorkspaceUsd: 0, perSessionUsd: 0 }),
+    sessionCostUsd: () => 100,
+  });
+  zeroed.records.push(record("a"));
+  zeroed.sessions.set("a", fakeSession("idle", { cost: 50 }).session);
+  const [status] = await zeroed.orchestrator.list();
+  assert.equal(status?.overBudget, undefined);
+  await zeroed.orchestrator.create({ name: "b", prompt: "go" });
+  assert.equal(zeroed.created.length, 1);
+
+  const bare = harness();
+  bare.records.push(record("a"));
+  bare.sessions.set("a", fakeSession("idle", { cost: 1000 }).session);
+  const [plain] = await bare.orchestrator.list();
+  assert.equal(plain?.overBudget, undefined);
+  await bare.orchestrator.prompt({ id: "a", message: "carry on" });
+});
+
+test("a nonsense limit is clamped to off rather than obeyed", async () => {
+  // NaN in settings.json would otherwise refuse everything; the orchestrator
+  // treats an unreadable limit as no limit.
+  const h = harness({ costLimits: () => ({ perWorkspaceUsd: Number.NaN, perSessionUsd: -1 }) });
+  h.records.push(record("a"));
+  h.sessions.set("a", fakeSession("idle", { cost: 1000 }).session);
+  const [status] = await h.orchestrator.list();
+  assert.equal(status?.overBudget, undefined);
+  await h.orchestrator.create({ name: "b", prompt: "go" });
+  assert.equal(h.created.length, 1);
+});
+
+// A real git fixture for the diff stage: the orchestrator only advances the
+// pipeline on a successful diff, so the stage test needs one that succeeds.
+async function makeStageRepo(opts?: { dirty?: boolean }): Promise<{ repo: string; worktree: string; branch: string; baseSha: string }> {
+  const tmp = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "ompcode-stage-"));
+  const repo = path.join(tmp, "repo");
+  await fs.mkdir(repo);
+  await git(["-c", "init.defaultBranch=main", "init", "-q", "."], { cwd: repo });
+  await git(["config", "user.email", "t@example.com"], { cwd: repo });
+  await git(["config", "user.name", "t"], { cwd: repo });
+  await git(["config", "commit.gpgsign", "false"], { cwd: repo });
+  await fs.writeFile(path.join(repo, "a.txt"), "one\ntwo\n");
+  await fs.writeFile(
+    path.join(repo, "package.json"),
+    JSON.stringify({ scripts: { ok: "echo ok", nope: "exit 3" } }),
+  );
+  await git(["add", "-A"], { cwd: repo });
+  await git(["commit", "-qm", "first"], { cwd: repo });
+  const baseSha = (await git(["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+  const worktree = path.join(tmp, "wt");
+  const branch = "omp/stage-ws";
+  await git(["worktree", "add", "-q", "-b", branch, worktree, "main"], { cwd: repo });
+  if (opts?.dirty !== false) {
+    await fs.writeFile(path.join(worktree, "a.txt"), "one\nchanged\n");
+  }
+  return { repo, worktree, branch, baseSha };
+}
