@@ -113,6 +113,14 @@ export interface SessionInfo {
   workspaceId?: string;
   /** Branch of that workspace — the board shows it instead of a bare folder name. */
   branch?: string;
+  /** Child process lifecycle, mirroring the last `{t:"proc"}` post. */
+  procState: "starting" | "running" | "exited" | "restarting" | "error";
+  /** Last process/init failure detail; undefined while the process is healthy. */
+  lastError?: string;
+  /** Turns this session completed — agent_end increments, session stats correct. */
+  turnsCompleted: number;
+  /** Wall-clock start of the running turn; undefined between turns. */
+  turnStartedAt?: number;
 }
 
 /**
@@ -457,6 +465,10 @@ export class OmpSession implements vscode.Disposable {
             ? "working"
             : "idle",
       pending: this.queuedSends > 0 || this.turnPendingOrActive || this.streaming,
+      procState: this.procState,
+      turnsCompleted: this.turnsCompleted,
+      ...(this.lastError ? { lastError: this.lastError } : {}),
+      ...(this.turnStartedAt ? { turnStartedAt: this.turnStartedAt } : {}),
       cost: this.lastCost,
       subagents: subagentSnapshot(this.subagentState).subagents,
       closable: !this.surfaceClosed && this.callbacks.onClose !== undefined,
@@ -473,6 +485,11 @@ export class OmpSession implements vscode.Disposable {
   /** Send the abort signal — the board's stop button. */
   abort(): void {
     this.proc?.send({ type: "abort" });
+  }
+
+  /** Public abort surface for board and remote wiring; same signal as abort(). */
+  abortTurn(): void {
+    this.abort();
   }
 
   /** Close the session's UI surface when it has one. */
@@ -1075,6 +1092,8 @@ export class OmpSession implements vscode.Disposable {
     });
     this.initDone.catch(() => {}); // avoid unhandled rejection when nobody awaits
 
+    this.procState = "starting";
+    this.lastError = undefined;
     this.post({ t: "proc", status: "starting" });
 
     const cfg = vscode.workspace.getConfiguration("ompcode");
@@ -1135,12 +1154,16 @@ export class OmpSession implements vscode.Disposable {
       // amount of restarting fixes that, so go straight to the setup card.
       const needsSetup = /No models available/i.test(stderrTail);
       if (needsSetup) {
+        this.procState = "exited";
+        this.lastError = detail;
         this.post({ t: "proc", status: "exited", detail, needsSetup });
         return;
       }
       this.autoRestartAttempts++;
       if (this.autoRestartAttempts <= 1) {
         this.output.appendLine("[omp] auto-restarting after crash…");
+        this.procState = "restarting";
+        this.lastError = detail;
         this.post({ t: "proc", status: "restarting", detail });
         this.post({
           t: "frame",
@@ -1164,6 +1187,8 @@ export class OmpSession implements vscode.Disposable {
         }, 1000);
         return;
       }
+      this.procState = "exited";
+      this.lastError = detail;
       this.post({ t: "proc", status: "exited", detail, needsSetup });
     });
     proc.onError((err: NodeJS.ErrnoException) => {
@@ -1189,6 +1214,8 @@ export class OmpSession implements vscode.Disposable {
         : `omp process error: ${err.message}`;
       this.initReject?.(new Error(detail));
       this.output.appendLine(`[omp] ${detail}`);
+      this.procState = "error";
+      this.lastError = detail;
       this.post({ t: "proc", status: "error", detail });
     });
 
@@ -1223,7 +1250,8 @@ export class OmpSession implements vscode.Disposable {
     } else if (frame.type === "agent_end") {
       this.streaming = false;
       this.turnPendingOrActive = false;
-      this.notifyTurnDone();
+      this.notifyTurnDone(); // also clears turnStartedAt
+      this.turnsCompleted++;
       void this.pushSessionStats();
       void this.finishRoutedTurn(proc);
       OmpSession.notifyBoard();
@@ -1473,6 +1501,8 @@ export class OmpSession implements vscode.Disposable {
       if (this.proc !== proc) {
         return;
       }
+      this.procState = "running";
+      this.lastError = undefined;
       this.post({ t: "proc", status: "running" });
 
       // Initial fetches run concurrently (state is re-fetched after set_* below).
@@ -1547,7 +1577,10 @@ export class OmpSession implements vscode.Disposable {
       this.hostToolsDown("handshake failed");
       this.initReject?.(new Error(`init failed: ${message}`));
       this.output.appendLine(`[omp] init failed: ${message}`);
-      this.post({ t: "proc", status: "error", detail: `init failed: ${message}` });
+      const detail = `init failed: ${message}`;
+      this.procState = "error";
+      this.lastError = detail;
+      this.post({ t: "proc", status: "error", detail });
       OmpSession.notifyBoard();
     }
   }
@@ -1995,6 +2028,13 @@ export class OmpSession implements vscode.Disposable {
 
   /** agent_start timestamp — completion notifications only fire for slow turns. */
   private turnStartedAt = 0;
+
+  /** Board-facing process lifecycle, mirroring the last `{t:"proc"}` post. */
+  private procState: SessionInfo["procState"] = "starting";
+  /** Last process/init failure detail; cleared once a process is starting/healthy. */
+  private lastError: string | undefined;
+  /** Turns completed — agent_end increments, get_session_stats corrects. */
+  private turnsCompleted = 0;
 
   /**
    * Native notification when a long turn finishes while VS Code is unfocused.
@@ -3575,10 +3615,16 @@ export class OmpSession implements vscode.Disposable {
     try {
       const stats = await this.request({ type: "get_session_stats" });
       this.post({ t: "sessionStats", stats });
-      const cost =
-        stats && typeof stats === "object" ? (stats as Record<string, unknown>).cost : undefined;
+      const record = stats && typeof stats === "object" ? (stats as Record<string, unknown>) : undefined;
+      const cost = record?.cost;
+      const turns = record?.turns;
+      if (typeof turns === "number") {
+        this.turnsCompleted = turns; // the agent's own count wins when it reports one
+      }
       if (typeof cost === "number") {
         this.lastCost = cost;
+      }
+      if (typeof cost === "number" || typeof turns === "number") {
         OmpSession.notifyBoard();
       }
     } catch {
