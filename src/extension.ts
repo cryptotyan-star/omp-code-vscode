@@ -786,6 +786,7 @@ export function activate(context: vscode.ExtensionContext): void {
    * "not running".
    */
   function liveWorkspaceSession(workspaceId: string): OmpSession | undefined {
+
     for (const [panel, id] of panelWorkspaces) {
       if (id !== workspaceId) {
         continue;
@@ -797,6 +798,18 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     return OmpSession.allSessions().find(
       (session) => session.snapshot().workspaceId === workspaceId,
+    );
+  }
+
+  /**
+   * The sidebar chat — the session the ChatViewProvider drives, and the
+   * board's orchestrator row. `closable: false` singles it out among
+   * orchestrating sessions: plain chat tabs in the main checkout orchestrate
+   * too, but only the sidebar's surface cannot be closed.
+   */
+  function mainChatSession(): OmpSession | undefined {
+    return OmpSession.allSessions().find(
+      (session) => session.orchestrates && !session.snapshot().closable,
     );
   }
 
@@ -829,6 +842,20 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.workspace
         .getConfiguration("ompcode")
         .get<number>("orchestratorMaxWorkspaces", 5),
+    // Same liveness for the cost ceilings: raising a limit is the natural
+    // reaction to a budget stop, and it must take effect on the next tick.
+    costLimits: () => {
+      const cfg = vscode.workspace.getConfiguration("ompcode");
+      return {
+        perWorkspaceUsd: cfg.get<number>("costLimitPerWorkspaceUsd", 0),
+        perSessionUsd: cfg.get<number>("costLimitPerSessionUsd", 0),
+      };
+    },
+    // The orchestrator's own spend is the sidebar chat's; zero when it is gone.
+    sessionCostUsd: () => mainChatSession()?.snapshot().cost ?? 0,
+    // An over-budget workspace stops mid-turn through the same signal as a
+    // manual stop; one with no live chat has nothing to abort.
+    abortTurn: (workspaceId) => liveWorkspaceSession(workspaceId)?.abortTurn(),
     // The user's setup policy, so a model asking for `runSetup: true` cannot
     // turn an operator's "never" into a licence to run the repository's setup
     // commands. The manager checks the explicit flag before the policy — which
@@ -978,8 +1005,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const boardPanel = new BoardViewProvider(context, {
     snapshot: () => {
       const cfg = vscode.workspace.getConfiguration("ompcode");
+      // The orchestrator row is the sidebar chat: its lifecycle status is
+      // already exactly the union BoardInput expects, and its clock shows the
+      // running turn (turnStartedAt is undefined between turns — no clock then).
+      const main = mainChatSession()?.snapshot();
       return buildBoardSnapshot({
-        orchestrator: undefined,
+        orchestrator: main
+          ? {
+              id: main.id,
+              model: main.model,
+              costUsd: main.cost,
+              state: main.status,
+              ...(main.turnStartedAt ? { startedAt: main.turnStartedAt } : {}),
+            }
+          : undefined,
         workspaces: boardStatuses,
         limits: {
           perWorkspaceUsd: cfg.get<number>("costLimitPerWorkspaceUsd", 0),
