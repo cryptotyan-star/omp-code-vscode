@@ -861,7 +861,7 @@ test("an over-budget workspace is flagged and refused at prompt", async () => {
   const [status] = await h.orchestrator.list();
   assert.equal(status?.overBudget, true);
   assert.equal(status?.costLimitUsd, 2);
-  assert.match(status?.lastError ?? "", /spent/);
+  assert.equal(status?.lastError, undefined, "a spent budget is not an error");
   assert.deepEqual(aborted, ["a"], "the turn is stopped once, at the first refresh");
 
   await h.orchestrator.list();

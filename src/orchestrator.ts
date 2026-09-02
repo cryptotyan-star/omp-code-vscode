@@ -866,7 +866,9 @@ export class Orchestrator {
     if (budget.over) {
       status.overBudget = true;
       status.costLimitUsd = budget.limitUsd;
-      status.lastError = budget.message;
+      // Deliberately no `lastError` here: the board's bar precedence puts a
+      // real failure above a spent budget, so writing the refusal into
+      // `lastError` would repaint every «лимит» row as «ошибка».
     }
 
     if (opts?.diff) {
