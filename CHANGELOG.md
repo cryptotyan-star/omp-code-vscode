@@ -6,6 +6,27 @@ All notable changes to OMP Code. Versions follow [semantic versioning](https://s
 
 ### Added
 
+- **A Processes board watches the whole race at once.** The new `Processes`
+  panel in the OMP Code sidebar draws the orchestrator and every workspace as
+  one row each: a state stripe along the top edge (violet filling as the
+  pipeline moves through создание → работа → diff → verify → merge, green when
+  merged, dark red on error, dashed gray while the agent waits for an answer),
+  five ticks for the pipeline stages, the elapsed clock, and the live cost of
+  every row. A workspace that crosses its cost limit stands out in dark red
+  with a «лимит» label instead of silently going idle. Clicking a row brings
+  its chat to the front, and hover actions stop or delete the workspace behind
+  it — the same commands the `Sessions` view runs. The footer keeps the
+  session total, and it turns red the moment the total crosses the session
+  limit.
+- `ompcode.costLimitPerWorkspaceUsd` and `ompcode.costLimitPerSessionUsd`
+  (both default `0`, meaning no limit) cap what a single workspace, and what
+  the orchestrator plus all of its workspaces together, may spend. A
+  workspace that reaches its limit has its current turn stopped — the
+  worktree, the branch and everything already written stay untouched — and
+  hitting the session limit makes the orchestrator refuse to start or prompt
+  further work until the limit is raised. Both settings are read live, so
+  raising one takes effect on the next tick without reloading the window.
+
 - **Every workspace gets its own terminal, and the board shows whose server
   is whose.** `Open Terminal` on a workspace row now opens a terminal pinned
   to its worktree — branch icon, `OMPCODE_WORKSPACE_ID` in the environment —
