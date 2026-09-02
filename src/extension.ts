@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { MAX_SNIPPET_CHARS, type Attachment } from "./attachments";
+import { buildBoardSnapshot } from "./boardModel";
+import { BoardViewProvider } from "./boardViewProvider";
 import { ChatViewProvider } from "./chatViewProvider";
 import {
   APPROVAL_MODES,
@@ -16,7 +18,7 @@ import {
 import { KEYED_PROVIDERS } from "./providers";
 import { REMOTE_PROTOCOL_VERSION } from "./remoteProtocol";
 import { HostToolBridge, buildWorkspaceHostTools } from "./hostTools";
-import { Orchestrator } from "./orchestrator";
+import { Orchestrator, type WorkspaceStatus } from "./orchestrator";
 import { SessionBoardProvider, type BoardNode } from "./sessionBoard";
 import { RemoteControlService, type RemoteGrant } from "./remoteControlService";
 import { BaseContentProvider } from "./review/baseContentProvider";
@@ -966,6 +968,75 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: board,
   });
 
+  /**
+   * The process board: same registry as the Sessions tree, drawn as a webview
+   * panel. The orchestrator's `list()` is async while the provider's snapshot
+   * is synchronous, so a cache sits between them: change events and a slow
+   * poll refill the cache, then the provider pushes (throttled, trailing edge).
+   */
+  let boardStatuses: WorkspaceStatus[] = [];
+  const boardPanel = new BoardViewProvider(context, {
+    snapshot: () => {
+      const cfg = vscode.workspace.getConfiguration("ompcode");
+      return buildBoardSnapshot({
+        orchestrator: undefined,
+        workspaces: boardStatuses,
+        limits: {
+          perWorkspaceUsd: cfg.get<number>("costLimitPerWorkspaceUsd", 0),
+          perSessionUsd: cfg.get<number>("costLimitPerSessionUsd", 0),
+        },
+        now: Date.now(),
+      });
+    },
+    onChange: (listener) => {
+      const bump = (): void => void refreshBoardStatuses().then(listener, listener);
+      const subs = [workspaces.onDidChange(bump), OmpSession.onBoardChange(bump)];
+      return new vscode.Disposable(() => {
+        for (const sub of subs) {
+          sub.dispose();
+        }
+      });
+    },
+    // Row actions reuse the existing commands: the workspace registry decides
+    // whether an id is a workspace (reveal/delete) or its live session (stop).
+    reveal: (id) => {
+      if (workspaces.get(id)) {
+        void vscode.commands.executeCommand("ompcode.workspace.reveal", id);
+      } else {
+        void vscode.commands.executeCommand("ompcode.sessionReveal", id);
+      }
+    },
+    stop: (id) => {
+      const session = liveWorkspaceSession(id);
+      if (session) {
+        void vscode.commands.executeCommand("ompcode.sessionAbort", session.snapshot().id);
+      }
+    },
+    remove: (id) => {
+      if (workspaces.get(id)) {
+        void vscode.commands.executeCommand("ompcode.workspace.delete", id);
+      }
+    },
+  });
+  const refreshBoardStatuses = (): Promise<void> =>
+    orchestrator.list().then(
+      (rows) => {
+        boardStatuses = rows;
+      },
+      (error: unknown) => {
+        output.appendLine(`[board] could not list workspaces: ${String(error)}`);
+      },
+    );
+  void refreshBoardStatuses();
+  // Costs tick upward without a registry or board event, so while the view is
+  // visible a slow poll keeps the numbers honest; hidden, the poll is skipped.
+  const pollTimer = setInterval(() => {
+    if (boardPanel.active) {
+      void refreshBoardStatuses().then(() => boardPanel.refresh());
+    }
+  }, 2000);
+  const boardPoll = new vscode.Disposable(() => clearInterval(pollTimer));
+
   // A workspace that is deleted takes its worktree with it, so the tab records
   // pointing at it can never be restored. Dropping them when the registry moves
   // — including the startup reconcile against `git worktree list` — keeps the
@@ -1215,6 +1286,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
+    vscode.window.registerWebviewViewProvider(BoardViewProvider.viewType, boardPanel, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     // Chat tabs are ordinary webview panels: VS Code persists them across a
     // window reload but throws them away unless something claims their
     // viewType. Without this every open chat vanished on "Developer: Reload
@@ -1240,6 +1314,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // The provider and the manager hold subscriptions of their own (session
     // board changes, the workspace registry); the TreeView disposes neither.
     board,
+    // The board view holds the change subscription and the flush timer; the
+    // poll's interval must die with the extension host.
+    boardPanel,
+    boardPoll,
     // The review provider owns a diff cache and a file watcher per worktree —
     // both must go when the extension does, or a deactivated window keeps
     // stat-ing worktrees.
