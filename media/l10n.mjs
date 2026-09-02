@@ -41,3 +41,18 @@ export function t(message, ...args) {
 
 /** The active language tag, for `lang` attributes and date formatting. */
 export const language = document.documentElement.lang || "en";
+
+/**
+ * Pick a plural form: the mock's `pl(n, one, few, many)` made language-aware.
+ * Russian uses the one/few/many rule (2–4 vs 5+); every other language
+ * collapses to one/few, so the `many` form is only ever read from a bundle.
+ */
+export function plural(count, one, few, many) {
+  const n = Math.abs(Number(count) || 0);
+  if (language === "ru") {
+    const m = n % 10;
+    const h = n % 100;
+    return m === 1 && h !== 11 ? one : m >= 2 && m <= 4 && (h < 12 || h > 14) ? few : many;
+  }
+  return n === 1 ? one : few;
+}

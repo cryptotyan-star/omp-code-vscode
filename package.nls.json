@@ -5,6 +5,7 @@
   "view.sessions.name": "Sessions",
   "view.review.name": "Review",
   "command.openChat.title": "OMP Code: Open Chat (Editor)",
+  "command.openBoard.title": "OMP Code: Open Process Board",
   "command.showHistory.title": "OMP Code: Session History",
   "command.newSession.title": "OMP Code: New Chat Tab",
   "command.setAnthropicKey.title": "OMP Code: Set Anthropic API Key",
