@@ -82,6 +82,10 @@
         }
       },
       {
+        "command": "ompcode.openBoard",
+        "title": "%command.openBoard.title%"
+      },
+      {
         "command": "ompcode.showHistory",
         "title": "%command.showHistory.title%"
       },

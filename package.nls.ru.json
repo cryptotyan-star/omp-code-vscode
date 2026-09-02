@@ -5,6 +5,7 @@
   "view.sessions.name": "Сессии",
   "view.review.name": "Ревью",
   "command.openChat.title": "OMP Code: открыть чат (вкладка)",
+  "command.openBoard.title": "OMP Code: открыть доску процессов",
   "command.showHistory.title": "OMP Code: история сессий",
   "command.newSession.title": "OMP Code: новая вкладка чата",
   "command.setAnthropicKey.title": "OMP Code: задать API-ключ Anthropic",

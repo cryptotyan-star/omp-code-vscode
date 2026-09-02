@@ -217,3 +217,138 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   .is-running .stripe > i::after, .is-running .ico svg, .needs-human .ico::after { animation: none; }
   .stripe > i { transition: none; }
 }
+
+/* ── editor pane (ompcode.boardPanel) ────────────────────────────────────
+   The mock's editor area ported next to the sidebar tree: tabs, crumbs,
+   stage strip, log, callout, composer, status bar. No activity bar, no demo
+   chrome. --c still comes from the is-* classes — the panel puts the
+   selected row's bar class on .editor, so crumbs and stages inherit it. */
+.board-window {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  grid-template-rows: 1fr 22px;
+  height: 100%;
+  min-height: 0;
+  background: var(--vscode-editor-background);
+}
+.pane {
+  background: var(--vscode-sideBar-background);
+  border-right: 1px solid var(--vscode-panel-border);
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+
+.editor { display: flex; flex-direction: column; min-width: 0; background: var(--vscode-editor-background); }
+.tabs { height: 35px; display: flex; background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background)); border-bottom: 1px solid var(--vscode-panel-border); overflow-x: auto; flex: none; }
+.tab {
+  position: relative; height: 35px; padding: 0 12px 0 10px;
+  display: flex; align-items: center; gap: 7px; white-space: nowrap;
+  border-right: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground);
+  font-size: 13px;
+}
+.tab.on { background: var(--vscode-editor-background); color: var(--vscode-foreground); }
+.tab .stripe { height: 2px; }
+.tab .tico { width: 14px; height: 14px; color: var(--c); display: grid; place-items: center; }
+.tab .tico svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.tab.is-running .tico svg { animation: spin 1s linear infinite; }
+.tab .x { width: 16px; height: 16px; border-radius: 3px; display: grid; place-items: center; opacity: 0; color: inherit; }
+.tab:hover .x, .tab.on .x { opacity: .8; }
+.tab .x:hover { background: var(--vscode-toolbar-hoverBackground); }
+.tab .x svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+
+.crumbs { height: 22px; padding: 0 16px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); flex: none; }
+.crumbs .sep { opacity: .5; }
+.crumbs .state { color: var(--c); font-weight: 600; }
+
+.stages { display: flex; padding: 8px 16px 0; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+.stages span { flex: 1; padding: 4px 0 6px; text-align: center; border-bottom: 2px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); letter-spacing: .02em; }
+.stages span.hit { border-bottom-color: var(--c); color: var(--vscode-foreground); }
+.stages span.now { color: var(--c); font-weight: 600; }
+.stages span.bad { border-bottom-color: var(--omp-err); color: var(--omp-err-text); font-weight: 600; }
+
+.log { flex: 1; overflow-y: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 10px; max-width: 780px; }
+.msg { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: start; }
+.msg .k { font-size: 11px; color: var(--vscode-descriptionForeground); padding-top: 2px; }
+.msg p { margin: 0 0 4px; max-width: 68ch; }
+.tool {
+  font-family: var(--vscode-editor-font-family); font-size: 12px;
+  background: var(--vscode-textCodeBlock-background, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
+  border-left: 2px solid var(--omp-accent);
+  padding: 6px 10px; white-space: pre-wrap; word-break: break-word;
+}
+.tool.bad { border-left-color: var(--omp-err); color: var(--omp-err-text); }
+.tool .dim { color: var(--vscode-descriptionForeground); }
+
+/* Magic UI "animated shiny text" for the live thinking line */
+.shiny {
+  display: inline-block; font-size: 12px; color: var(--vscode-descriptionForeground);
+  background: linear-gradient(90deg, var(--vscode-descriptionForeground) 0 40%, var(--omp-accent) 50%, var(--vscode-descriptionForeground) 60% 100%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: shine 2.4s linear infinite;
+}
+@keyframes shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+.callout {
+  position: relative; --cc: var(--omp-accent);
+  border: 1px solid color-mix(in srgb, var(--cc) 50%, transparent);
+  background: color-mix(in srgb, var(--cc) 8%, transparent);
+  padding: 8px 10px; display: flex; gap: 10px; align-items: center;
+  overflow: hidden;
+}
+.callout.err { --cc: var(--omp-err); }
+.callout p { margin: 0; }
+/* Magic UI border-beam: one bright point travelling the border of the thing that needs a human */
+.callout.beam::before {
+  content: ""; position: absolute; inset: -1px; pointer-events: none;
+  background: conic-gradient(from var(--a, 0deg), transparent 0 80%, var(--cc) 92%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  padding: 1px; animation: beam 3s linear infinite;
+}
+@property --a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes beam { to { --a: 360deg; } }
+
+.vbtn { padding: 3px 10px; border-radius: 2px; font-size: 12px; background: var(--vscode-button-secondaryBackground, var(--vscode-badge-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); flex: none; }
+.vbtn.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.vbtn:hover { filter: brightness(1.08); }
+
+.composer {
+  margin: 0 16px 10px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  display: grid; grid-template-rows: auto auto; max-width: 780px; flex: none;
+}
+.composer .in {
+  padding: 9px 12px; border: 0; outline: none; background: transparent;
+  color: var(--vscode-foreground); font: inherit;
+}
+.composer .in::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
+.composer .bar { display: flex; align-items: center; gap: 6px; padding: 0 8px 8px; flex-wrap: wrap; }
+.chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); }
+.composer .send { margin-left: auto; width: 24px; height: 24px; border-radius: 12px; background: var(--omp-accent); color: #fff; display: grid; place-items: center; }
+.composer .send svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+.status {
+  grid-column: 1 / -1;
+  background: var(--vscode-statusBar-background, var(--vscode-sideBar-background));
+  color: var(--vscode-statusBar-foreground, var(--vscode-foreground));
+  border-top: 1px solid var(--vscode-panel-border);
+  display: flex; align-items: stretch; font-size: 12px; overflow: hidden;
+}
+.status .it { display: flex; align-items: center; gap: 5px; padding: 0 7px; white-space: nowrap; }
+.status .it.run { --c: var(--omp-run); }
+.status .it.ok { --c: var(--omp-ok); }
+.status .it.wait { --c: var(--omp-wait); }
+.status .it.err { --c: #fff; background: var(--vscode-statusBarItem-errorBackground, var(--omp-err)); color: var(--vscode-statusBarItem-errorForeground, #fff); }
+.status .it.over { color: var(--omp-err-text); font-weight: 600; }
+.status .it .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.status .it.run .d { animation: pulse 1.2s ease-in-out infinite; }
+.status .grow { flex: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .shiny, .callout.beam::before, .status .it.run .d { animation: none; }
+}
+@media (max-width: 760px) {
+  .board-window { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 40%) 1fr 22px; }
+  .pane { border-right: 0; border-bottom: 1px solid var(--vscode-panel-border); }
+}

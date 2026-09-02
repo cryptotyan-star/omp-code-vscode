@@ -61,6 +61,8 @@ export type BoardToHost =
   | { t: "ready" }
   | { t: "reveal"; id: string }
   | { t: "stop"; id: string }
-  | { t: "delete"; id: string };
+  | { t: "delete"; id: string }
+  /** A line typed into the board panel's composer, addressed at one workspace. */
+  | { t: "prompt"; id: string; text: string };
 
 export type HostToBoard = { t: "board"; snapshot: BoardSnapshot };

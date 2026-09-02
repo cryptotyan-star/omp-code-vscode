@@ -5,6 +5,8 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { MAX_SNIPPET_CHARS, type Attachment } from "./attachments";
 import { buildBoardSnapshot } from "./boardModel";
+import { BoardPanel } from "./boardPanel";
+import type { BoardSnapshot } from "./boardTypes";
 import { BoardViewProvider } from "./boardViewProvider";
 import { ChatViewProvider } from "./chatViewProvider";
 import {
@@ -1000,63 +1002,12 @@ export function activate(context: vscode.ExtensionContext): void {
    * panel. The orchestrator's `list()` is async while the provider's snapshot
    * is synchronous, so a cache sits between them: change events and a slow
    * poll refill the cache, then the provider pushes (throttled, trailing edge).
+   *
+   * The editor-area board panel (ompcode.openBoard) draws the same rows, so
+   * the cache, the snapshot builder, the triggers and the row actions are
+   * built once here and handed to both surfaces.
    */
   let boardStatuses: WorkspaceStatus[] = [];
-  const boardPanel = new BoardViewProvider(context, {
-    snapshot: () => {
-      const cfg = vscode.workspace.getConfiguration("ompcode");
-      // The orchestrator row is the sidebar chat: its lifecycle status is
-      // already exactly the union BoardInput expects, and its clock shows the
-      // running turn (turnStartedAt is undefined between turns — no clock then).
-      const main = mainChatSession()?.snapshot();
-      return buildBoardSnapshot({
-        orchestrator: main
-          ? {
-              id: main.id,
-              model: main.model,
-              costUsd: main.cost,
-              state: main.status,
-              ...(main.turnStartedAt ? { startedAt: main.turnStartedAt } : {}),
-            }
-          : undefined,
-        workspaces: boardStatuses,
-        limits: {
-          perWorkspaceUsd: cfg.get<number>("costLimitPerWorkspaceUsd", 0),
-          perSessionUsd: cfg.get<number>("costLimitPerSessionUsd", 0),
-        },
-        now: Date.now(),
-      });
-    },
-    onChange: (listener) => {
-      const bump = (): void => void refreshBoardStatuses().then(listener, listener);
-      const subs = [workspaces.onDidChange(bump), OmpSession.onBoardChange(bump)];
-      return new vscode.Disposable(() => {
-        for (const sub of subs) {
-          sub.dispose();
-        }
-      });
-    },
-    // Row actions reuse the existing commands: the workspace registry decides
-    // whether an id is a workspace (reveal/delete) or its live session (stop).
-    reveal: (id) => {
-      if (workspaces.get(id)) {
-        void vscode.commands.executeCommand("ompcode.workspace.reveal", id);
-      } else {
-        void vscode.commands.executeCommand("ompcode.sessionReveal", id);
-      }
-    },
-    stop: (id) => {
-      const session = liveWorkspaceSession(id);
-      if (session) {
-        void vscode.commands.executeCommand("ompcode.sessionAbort", session.snapshot().id);
-      }
-    },
-    remove: (id) => {
-      if (workspaces.get(id)) {
-        void vscode.commands.executeCommand("ompcode.workspace.delete", id);
-      }
-    },
-  });
   const refreshBoardStatuses = (): Promise<void> =>
     orchestrator.list().then(
       (rows) => {
@@ -1067,11 +1018,108 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     );
   void refreshBoardStatuses();
-  // Costs tick upward without a registry or board event, so while the view is
-  // visible a slow poll keeps the numbers honest; hidden, the poll is skipped.
+
+  const boardSnapshot = (): BoardSnapshot => {
+    const cfg = vscode.workspace.getConfiguration("ompcode");
+    // The orchestrator row is the sidebar chat: its lifecycle status is
+    // already exactly the union BoardInput expects, and its clock shows the
+    // running turn (turnStartedAt is undefined between turns — no clock then).
+    const main = mainChatSession()?.snapshot();
+    return buildBoardSnapshot({
+      orchestrator: main
+        ? {
+            id: main.id,
+            model: main.model,
+            costUsd: main.cost,
+            state: main.status,
+            ...(main.turnStartedAt ? { startedAt: main.turnStartedAt } : {}),
+          }
+        : undefined,
+      workspaces: boardStatuses,
+      limits: {
+        perWorkspaceUsd: cfg.get<number>("costLimitPerWorkspaceUsd", 0),
+        perSessionUsd: cfg.get<number>("costLimitPerSessionUsd", 0),
+      },
+      now: Date.now(),
+    });
+  };
+
+  /**
+   * One fan-out behind both board surfaces: a single pair of subscriptions
+   * refills the cache, then every listening surface repaints. Listeners come
+   * and go with the views; the triggers live as long as the extension.
+   */
+  const boardListeners = new Set<() => void>();
+  const notifyBoardListeners = (): void => {
+    for (const listener of boardListeners) {
+      listener();
+    }
+  };
+  const bumpBoard = (): void =>
+    void refreshBoardStatuses().then(notifyBoardListeners, notifyBoardListeners);
+  const boardTriggerSubs = [workspaces.onDidChange(bumpBoard), OmpSession.onBoardChange(bumpBoard)];
+  const boardTriggers = new vscode.Disposable(() => {
+    for (const sub of boardTriggerSubs) {
+      sub.dispose();
+    }
+  });
+  const boardOnChange = (listener: () => void): vscode.Disposable => {
+    boardListeners.add(listener);
+    return new vscode.Disposable(() => {
+      boardListeners.delete(listener);
+    });
+  };
+
+  // Row actions reuse the existing commands: the workspace registry decides
+  // whether an id is a workspace (reveal/delete) or its live session (stop).
+  const revealBoardRow = (id: string): void => {
+    if (workspaces.get(id)) {
+      void vscode.commands.executeCommand("ompcode.workspace.reveal", id);
+    } else {
+      void vscode.commands.executeCommand("ompcode.sessionReveal", id);
+    }
+  };
+  const stopBoardRow = (id: string): void => {
+    const session = liveWorkspaceSession(id);
+    if (session) {
+      void vscode.commands.executeCommand("ompcode.sessionAbort", session.snapshot().id);
+    }
+  };
+  const removeBoardRow = (id: string): void => {
+    if (workspaces.get(id)) {
+      void vscode.commands.executeCommand("ompcode.workspace.delete", id);
+    }
+  };
+
+  const boardPanel = new BoardViewProvider(context, {
+    snapshot: boardSnapshot,
+    onChange: boardOnChange,
+    reveal: revealBoardRow,
+    stop: stopBoardRow,
+    remove: removeBoardRow,
+  });
+  const boardEditor = new BoardPanel(context, {
+    snapshot: boardSnapshot,
+    onChange: boardOnChange,
+    reveal: revealBoardRow,
+    stop: stopBoardRow,
+    remove: removeBoardRow,
+    // The composer talks to the workspace's agent through the same facade the
+    // workspace tools use; its refusals travel back as promptError messages.
+    prompt: (id, text) => orchestrator.prompt({ id, message: text }),
+    // The branch the live workspaces share, for the status bar and the
+    // breadcrumbs; no workspaces yet means no branch to name.
+    baseBranch: () => workspaces.list()[0]?.baseRef,
+  });
+
+  // Costs tick upward without a registry or board event, so while either
+  // surface is visible a slow poll keeps the numbers honest; hidden, skipped.
   const pollTimer = setInterval(() => {
-    if (boardPanel.active) {
-      void refreshBoardStatuses().then(() => boardPanel.refresh());
+    if (boardPanel.active || boardEditor.active) {
+      void refreshBoardStatuses().then(() => {
+        boardPanel.refresh();
+        boardEditor.refresh();
+      });
     }
   }, 2000);
   const boardPoll = new vscode.Disposable(() => clearInterval(pollTimer));
@@ -1339,6 +1387,15 @@ export function activate(context: vscode.ExtensionContext): void {
         return Promise.resolve();
       },
     }),
+    // Same restore path for the board panel: VS Code persists it across a
+    // reload, and without a serializer for its viewType it would come back
+    // blank. adopt() rebinds it to the live snapshot pipeline.
+    vscode.window.registerWebviewPanelSerializer(BoardPanel.viewType, {
+      deserializeWebviewPanel: (panel) => {
+        boardEditor.adopt(panel);
+        return Promise.resolve();
+      },
+    }),
     // A TreeView instance, not just a registered provider: later phases need the
     // handle for the view badge (running subagents) and for revealing a row.
     boardView,
@@ -1354,8 +1411,11 @@ export function activate(context: vscode.ExtensionContext): void {
     // board changes, the workspace registry); the TreeView disposes neither.
     board,
     // The board view holds the change subscription and the flush timer; the
-    // poll's interval must die with the extension host.
+    // poll's interval must die with the extension host. The editor panel and
+    // the shared trigger fan-out follow the same rule.
     boardPanel,
+    boardEditor,
+    boardTriggers,
     boardPoll,
     // The review provider owns a diff cache and a file watcher per worktree —
     // both must go when the extension does, or a deactivated window keeps
@@ -1513,6 +1573,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // Title-bar entry point: the chat opens as an editor tab beside the code,
     // not as the left sidebar view.
     vscode.commands.registerCommand("ompcode.openChat", () => void revealChatTab()),
+
+    // The full mock window — tree, tabs, stage strip, log, composer, status
+    // bar — as an editor tab over the same live snapshot the sidebar draws.
+    vscode.commands.registerCommand("ompcode.openBoard", () => boardEditor.show()),
 
     vscode.commands.registerCommand("ompcode.showHistory", async () => {
       (await revealChatTab())?.showHistory();
