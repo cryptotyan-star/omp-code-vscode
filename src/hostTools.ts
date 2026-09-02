@@ -131,6 +131,12 @@ export interface WorkspaceStatusLike {
   lastText?: string;
   /** Optional so a status without it still satisfies this interface. */
   worktreePath?: string;
+  /** Pipeline stage, when the orchestrator tracks one; absent means unknown. */
+  stage?: string;
+  /** Set once the workspace has spent its per-workspace limit. */
+  overBudget?: boolean;
+  /** The per-workspace limit in dollars; 0 or absent means no limit. */
+  costLimitUsd?: number;
 }
 
 export interface VerifyResultLike {
@@ -162,7 +168,14 @@ export interface OrchestratorApi {
     // Optional so a caller (and the unit test's fake) that reports no unknown
     // ids still satisfies this shape; `wait` drops them rather than failing,
     // and the handler names them so the model can re-list instead of guessing.
-  }): Promise<{ statuses: WorkspaceStatusLike[]; timedOut: boolean; unknownIds?: string[] }>;
+  }): Promise<{
+    statuses: WorkspaceStatusLike[];
+    timedOut: boolean;
+    unknownIds?: string[];
+    // Present only when the session is past its cost limit: the wait came
+    // back at once instead of blocking, and the handler says what that means.
+    reason?: "over_budget";
+  }>;
   diff(a: {
     id: string;
     path?: string;
@@ -182,6 +195,12 @@ export interface OrchestratorApi {
     commitMessage?: string;
   }): Promise<MergeResult>;
   remove(a: { id: string; deleteBranch?: boolean; force?: boolean }): Promise<void>;
+  /**
+   * The session-wide spend and cap, for the total line of `workspace_list`
+   * and `workspace_wait`. Optional: a host that wires no limits prints the
+   * "no limit" form, and the over-budget refusals never fire from here.
+   */
+  sessionBudget?(): { costUsd: number; limitUsd: number };
 }
 
 export type PromptMode = "prompt" | "steer" | "follow_up";
@@ -495,7 +514,13 @@ function duration(ms: number): string {
   return `${m}m${String(total % 60).padStart(2, "0")}s`;
 }
 
-/** `id · name · branch · model · state · $cost · +A/-D · N files · setup:done` */
+/**
+ * `id · name · branch · model · state · cost:$x.xx · +A/-D · N files · setup:done`
+ *
+ * The `cost:` field is the cost column; a workspace past its per-workspace
+ * limit gets `OVER BUDGET` right after it, because that is the one fact that
+ * changes what the orchestrating model does next.
+ */
 export function formatStatusRow(status: WorkspaceStatusLike): string {
   const parts = [
     status.id,
@@ -503,11 +528,19 @@ export function formatStatusRow(status: WorkspaceStatusLike): string {
     status.branch,
     status.model || "(session model)",
     status.state,
-    money(status.cost),
+    `cost: ${money(status.cost)}`,
     `+${status.added}/-${status.deleted}`,
     `${status.files} ${status.files === 1 ? "file" : "files"}`,
     `setup:${status.setupState}`,
   ];
+  if (status.overBudget === true) {
+    const limit = status.costLimitUsd;
+    parts.push(
+      typeof limit === "number" && limit > 0
+        ? `OVER BUDGET (limit ${money(limit)})`
+        : "OVER BUDGET",
+    );
+  }
   if (status.mergeable !== undefined) {
     parts.push(`mergeable:${status.mergeable ? "yes" : "no"}`);
   }
@@ -528,6 +561,36 @@ function statusLines(status: WorkspaceStatusLike): string[] {
     lines.splice(2, 0, `path: ${status.worktreePath}`);
   }
   return lines;
+}
+
+/**
+ * The final line of `workspace_list` and `workspace_wait`: the whole
+ * session's spend against its cap, or the spend alone when no cap is set.
+ * A session limit that has been reached is the sentence that follows — the
+ * model must not retry a refused create or prompt hoping the number moved.
+ */
+function budgetLine(budget: { costUsd: number; limitUsd: number }): string {
+  const { costUsd, limitUsd } = budget;
+  if (limitUsd > 0) {
+    return costUsd >= limitUsd
+      ? `total ${money(costUsd)} of ${money(limitUsd)} limit — session budget reached: create and prompt are refused, and retrying does not lower the total. Report to the human and wait.`
+      : `total ${money(costUsd)} of ${money(limitUsd)} limit`;
+  }
+  return `total ${money(costUsd)} · no limit`;
+}
+
+/**
+ * The session spend and cap the host reports; derived from the rows a call
+ * just saw when the host wires no budget callback at all.
+ */
+function sessionBudgetOf(
+  orchestrator: OrchestratorApi,
+  statuses: WorkspaceStatusLike[],
+): { costUsd: number; limitUsd: number } {
+  return orchestrator.sessionBudget?.() ?? {
+    costUsd: statuses.reduce((sum, status) => sum + status.cost, 0),
+    limitUsd: 0,
+  };
 }
 
 /**
@@ -706,6 +769,15 @@ export function buildWorkspaceHostTools(orchestrator: OrchestratorApi): HostTool
               'Tell the human which workspaces are waiting, or delete one and recreate it with approvalMode "yolo".',
           );
         }
+        const overBudget = statuses.filter((status) => status.overBudget === true);
+        if (overBudget.length > 0) {
+          lines.push(
+            "",
+            `Over its cost limit: ${overBudget.map((s) => s.id).join(", ")}. ` +
+              "Raise ompcode.costLimitPerWorkspaceUsd or delete the workspace — never delete it only to recreate the same work under a fresh limit.",
+          );
+        }
+        lines.push("", budgetLine(sessionBudgetOf(orchestrator, statuses)));
         return outcome(lines.join("\n"), statuses);
       },
     },
@@ -859,6 +931,23 @@ export function buildWorkspaceHostTools(orchestrator: OrchestratorApi): HostTool
         );
 
         lines.push("");
+        const budget = sessionBudgetOf(orchestrator, result.statuses);
+        // The session's own spend goes ahead of the verdict: over budget or
+        // not, the model reads the numbers first.
+        lines.push(budgetLine(budget));
+        if (result.reason === "over_budget") {
+          lines.push(
+            "",
+            "The session is past its cost limit (ompcode.costLimitPerSessionUsd), so this wait returned immediately instead of blocking, and workspace_create and workspace_prompt are refused. " +
+              "Report the run to the human and wait — do not delete workspaces to dodge the limit, and do not retry hoping the number moved.",
+          );
+          return outcome(lines.join("\n"), {
+            timedOut: result.timedOut,
+            statuses: result.statuses,
+            unknownIds: unknown,
+            reason: "over_budget",
+          });
+        }
         if (result.timedOut) {
           lines.push(
             `Waited ${waitSeconds}s and ${running.length > 0 ? `${running.length} workspace(s) are` : "work is"} still running. ` +

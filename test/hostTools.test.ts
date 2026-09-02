@@ -1026,3 +1026,142 @@ test("a windows host path is redacted, and repo-relative paths stay readable", a
   assert.match(text, /<host path>/);
   assert.ok(text.includes("src/auth.ts"), "repo-relative paths are the actionable part");
 });
+
+// ---------------------------------------------------------------------------
+// Cost column and budget lines
+//
+// The model reads these rows verbatim: a cost it cannot parse is a cost it
+// cannot act on, and a session over its limit has to be told to stop, not
+// left to discover it one refused create at a time.
+// ---------------------------------------------------------------------------
+
+test("workspace_list prints a cost column for every row", async () => {
+  const { io, bridge } = makeBridge({
+    async list() {
+      return [status({ cost: 0.42 }), status({ id: "ws-2", name: "retry", cost: 2.7 })];
+    },
+  });
+  bridge.handleCall(call({ id: "f" }));
+  await settle();
+  const text = io.textOf(io.results()[0]);
+  assert.match(text, /ws-1 · auth-jwt · omp\/auth-jwt ·.*· cost: \$0\.420/);
+  assert.match(text, /ws-2 · retry ·.*· cost: \$2\.70/);
+});
+
+test("workspace_list ends with the total line, with and without a limit", async () => {
+  const withLimit = makeBridge({
+    sessionBudget: () => ({ costUsd: 3.5, limitUsd: 10 }),
+  });
+  withLimit.bridge.handleCall(call({ id: "f" }));
+  await settle();
+  const limited = withLimit.io.textOf(withLimit.io.results()[0]);
+  assert.match(limited, /total \$3\.50 of \$10\.00 limit$/m);
+
+  const noLimit = makeBridge();
+  noLimit.bridge.handleCall(call({ id: "g" }));
+  await settle();
+  const bare = noLimit.io.textOf(noLimit.io.results()[0]);
+  assert.match(bare, /total \$0\.420 · no limit/);
+});
+
+test("a reached session limit says so on the total line", async () => {
+  const { io, bridge } = makeBridge({
+    sessionBudget: () => ({ costUsd: 10, limitUsd: 10 }),
+  });
+  bridge.handleCall(call({ id: "f" }));
+  await settle();
+  const text = io.textOf(io.results()[0]);
+  assert.match(text, /total \$10\.00 of \$10\.00 limit/);
+  assert.match(text, /session budget reached/);
+  assert.match(text, /retrying does not lower the total/);
+});
+
+test("an over-budget workspace row is marked, and the list names the way out", async () => {
+  const { io, bridge } = makeBridge({
+    async list() {
+      return [status({ cost: 2.5, costLimitUsd: 2, overBudget: true })];
+    },
+  });
+  bridge.handleCall(call({ id: "f" }));
+  await settle();
+  const text = io.textOf(io.results()[0]);
+  assert.match(text, /cost: \$2\.50/);
+  assert.match(text, /OVER BUDGET \(limit \$2\.00\)/);
+  assert.match(text, /raise ompcode\.costLimitPerWorkspaceUsd|Raise ompcode\.costLimitPerWorkspaceUsd/i);
+  assert.match(text, /never delete it only to recreate/);
+});
+
+test("a wait over the session budget returns at once and says what to do", async () => {
+  const seen = [];
+  const { io, bridge } = makeBridge({
+    async wait(a) {
+      seen.push(a);
+      return { statuses: [status({ state: "working" })], timedOut: false, reason: "over_budget" };
+    },
+    sessionBudget: () => ({ costUsd: 12, limitUsd: 10 }),
+  });
+  bridge.handleCall(call({ id: "f", toolName: "workspace_wait", arguments: {} }));
+  await settle();
+  const result = io.results()[0];
+  assert.equal(result.isError, false, "an over-budget wait is an answer, not a failure");
+  const text = io.textOf(result);
+  assert.match(text, /total \$12\.00 of \$10\.00 limit/);
+  assert.match(text, /returned immediately instead of blocking/);
+  assert.match(text, /ompcode\.costLimitPerSessionUsd/);
+  assert.match(text, /do not delete workspaces to dodge the limit/);
+  assert.equal(result.result.details.reason, "over_budget");
+});
+
+test("an over-session-budget create refusal reaches the model as an error", async () => {
+  const { io, bridge } = makeBridge({
+    async create() {
+      throw new Error(
+        "The session has spent $10.00 of its $10.00 cost limit, so no workspace work is started or sent. " +
+          "Report the run to the human and wait; the limit is the ompcode.costLimitPerSessionUsd setting, and retrying does not lower the total.",
+      );
+    },
+  });
+  bridge.handleCall(
+    call({ id: "f", toolName: "workspace_create", arguments: { name: "next-task", prompt: "go" } }),
+  );
+  await settle();
+  const result = io.results()[0];
+  assert.equal(result.isError, true);
+  const text = io.textOf(result);
+  assert.match(text, /\$10\.00 of its \$10\.00 cost limit/);
+  assert.match(text, /ompcode\.costLimitPerSessionUsd/);
+});
+
+test("an over-budget prompt refusal names the workspace, the spend and the fix", async () => {
+  const { io, bridge } = makeBridge({
+    async prompt() {
+      throw new Error(
+        "workspace auth-jwt spent $2.50 of its $2.00 limit; raise ompcode.costLimitPerWorkspaceUsd or delete the workspace",
+      );
+    },
+  });
+  bridge.handleCall(
+    call({ id: "f", toolName: "workspace_prompt", arguments: { id: "ws-1", message: "carry on" } }),
+  );
+  await settle();
+  const result = io.results()[0];
+  assert.equal(result.isError, true);
+  const text = io.textOf(result);
+  assert.match(text, /spent \$2\.50 of its \$2\.00 limit/);
+  assert.match(text, /ompcode\.costLimitPerWorkspaceUsd/);
+  assert.match(text, /delete the workspace/);
+});
+
+test("wait progress updates carry the cost column too", async () => {
+  const { io, bridge } = makeBridge({
+    async wait(a) {
+      a.onProgress([status({ cost: 1.25, overBudget: true, costLimitUsd: 1 })]);
+      return { statuses: [status()], timedOut: true };
+    },
+  });
+  bridge.handleCall(call({ id: "f", toolName: "workspace_wait", arguments: {} }));
+  await settle();
+  const update = io.updates()[0].partialResult.content[0].text;
+  assert.match(update, /cost: \$1\.25/);
+  assert.match(update, /OVER BUDGET \(limit \$1\.00\)/);
+});

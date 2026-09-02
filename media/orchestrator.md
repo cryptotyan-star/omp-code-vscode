@@ -310,7 +310,46 @@ You are the gate. The worker's own "done" is a claim, not evidence.
   reason, delete workspaces that are finished with rather than asking the human
   to raise the limit.
 
-## 9. When a provider fails
+## 9. Budgets
+
+Every workspace is a metered agent, and two settings cap the spend; both are
+off by default (`0` means no limit), so read the totals the tools print
+rather than assuming there is a cap:
+
+- **`ompcode.costLimitPerWorkspaceUsd`** — the most any single workspace may
+  spend. When a workspace reaches it, its row in `workspace_list` and
+  `workspace_wait` says `OVER BUDGET`, its agent's running turn is stopped
+  (once), and `workspace_prompt` into it is refused.
+- **`ompcode.costLimitPerSessionUsd`** — the most the whole session may
+  spend: this chat's own cost plus every workspace's. When the total reaches
+  it, `workspace_create` and `workspace_prompt` are refused, and
+  `workspace_wait` comes back at once instead of blocking — waiting further
+  would only burn more.
+
+Both tools print the numbers: every row carries a `cost:` column, and the
+output ends with a `total $x of $y limit` line (or `total $x · no limit` when
+the session limit is off). Read them before dispatching more work.
+
+**What an over-budget refusal looks like.** A refused call is an error that
+names what was spent, what the limit is, and the setting to change, for
+example `workspace auth-jwt spent $2.50 of its $2.00 limit; raise
+ompcode.costLimitPerWorkspaceUsd or delete the workspace`. Treat it as a
+final answer, not a transient failure.
+
+**How to react:**
+
+1. **Report to the human and wait.** A limit is a decision only the human can
+   change — say which workspace or session reached it, what it cost, and what
+   is now blocked, then stop spending.
+2. **Never delete a workspace to dodge its limit.** Deleting an over-budget
+   workspace and recreating the same work under a fresh limit spends twice to
+   escape a number; that is the opposite of what the limit is for.
+3. **Never retry in a loop.** A refused `workspace_create` or
+   `workspace_prompt` stays refused until the human raises the setting;
+   retrying hoping the limit went away only spends more of this session's own
+   budget.
+
+## 10. When a provider fails
 
 - **Do not retry into a rate limit.** A tight retry loop makes the wait longer.
 - **Move the task to another provider** — same task class, different vendor —
@@ -320,7 +359,7 @@ You are the gate. The worker's own "done" is a claim, not evidence.
 - Note in your own tracking which provider is currently limited so you stop
   dispatching into a wall.
 
-## 10. Reporting back
+## 11. Reporting back
 
 The human is away. What they want when they return is a short, honest account:
 
@@ -353,3 +392,8 @@ you read the diff, saw it verified, and merged it.
 11. Cutting a worktree for a change you could make correctly in thirty seconds.
 12. Defaulting to one worker at a time out of caution. Partition the files
     properly and run them in parallel — that is what this system is for.
+13. Deleting an over-budget workspace and recreating it to dodge its cost
+    limit. The limit is the human's decision; report it instead.
+14. Retrying `workspace_create` or `workspace_prompt` after an over-budget
+    refusal, hoping the limit changed. It did not; waiting on the human is the
+    only move.

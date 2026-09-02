@@ -31,9 +31,11 @@ import { workspaceDiff, fileDiff, type WorkspaceDiff } from "./workspaces/diff.t
 import { samePath } from "./workspaces/git.ts";
 import { mergeWorkspace, preflight, type MergeResult, type MergeStrategy } from "./workspaces/merge.ts";
 import { detectVerifyCommand, runVerify, type VerifyResult } from "./workspaces/verify.ts";
+import { evaluateBudget, sessionTotal } from "./costGuard.ts";
 import type { WorkspaceManager } from "./workspaces/manager";
 import type { WorkspaceRecord } from "./workspaces/types";
 import type { ApprovalMode, OmpSession } from "./ompSession";
+import type { BoardStage } from "./boardTypes";
 
 /**
  * What a workspace is doing right now, as an orchestrating model needs to see
@@ -81,6 +83,16 @@ export interface WorkspaceStatus {
   setupState: string;
   /** Tail of the agent's last reply, one line, at most {@link LAST_TEXT_CHARS}. */
   lastText?: string;
+  /** How far this workspace is through the pipeline; see {@link BoardStage}. */
+  stage?: BoardStage;
+  /** When this workspace's agent was started, epoch ms. */
+  startedAt?: number;
+  /** The per-workspace limit this row is held to, in dollars. */
+  costLimitUsd?: number;
+  /** True once the workspace has spent its per-workspace limit. */
+  overBudget?: boolean;
+  /** What the last call into this workspace failed on, when it did. */
+  lastError?: string;
 }
 
 export interface OrchestratorDeps {
@@ -121,6 +133,26 @@ export interface OrchestratorDeps {
    * argument must not be able to opt back in for them.
    */
   setupPolicy?(): "auto" | "ask" | "never";
+  /**
+   * The `ompcode.costLimitPerWorkspaceUsd` and
+   * `ompcode.costLimitPerSessionUsd` caps. Read through a callback like the
+   * two settings above, and re-read on every refresh: the human raising a
+   * limit in the middle of a run — precisely because one just refused — must
+   * take effect without reloading. A value of 0 or below means that limit is
+   * off; a missing callback means no limits at all.
+   */
+  costLimits?(): { perWorkspaceUsd: number; perSessionUsd: number };
+  /**
+   * The orchestrator's own session cost in dollars, the other half of the
+   * session total. A missing callback counts as zero.
+   */
+  sessionCostUsd?(): number;
+  /**
+   * Called exactly once per workspace the first time it is seen at or past
+   * its per-workspace limit, so its agent stops spending while the
+   * orchestrating model decides what to do.
+   */
+  abortTurn?(workspaceId: string): void;
 }
 
 /** Fallback for `ompcode.orchestratorMaxWorkspaces`; mirrors the package.json default. */
@@ -154,6 +186,20 @@ const PROGRESS_INTERVAL_MS = 5_000;
  * and duplicating the byte arithmetic here would drift from it.
  */
 const TRUNCATION_MARKER = /\*\*\* diff truncated at \d+ of \d+ bytes \*\*\*/;
+
+/** Pipeline stages only move forward; this is the order they move in. */
+const STAGE_ORDER: Record<BoardStage, number> = {
+  created: 0,
+  working: 1,
+  diffed: 2,
+  verified: 3,
+  merged: 4,
+};
+
+/** Dollars for error messages and log lines; two decimals, always. */
+function dollars(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
 
 /**
  * States from which a workspace will not move on its own.
@@ -203,6 +249,17 @@ export class Orchestrator {
    */
   private createChain: Promise<unknown> = Promise.resolve();
 
+  /**
+   * Pipeline stage per workspace id, and when each one's agent was started.
+   * In memory only — the registry persists identity, not progress: a stage
+   * that survived a restart would read as truth when the diff, verify or
+   * merge behind it happened under a different facade.
+   */
+  private readonly stages = new Map<string, BoardStage>();
+  private readonly startedAt = new Map<string, number>();
+  /** Ids already aborted for overspending; `abortTurn` fires once per workspace. */
+  private readonly budgetAborted = new Set<string>();
+
   // Assigned in the body rather than as a parameter property: `node --test`
   // strips types without transforming and rejects parameter properties, and
   // this module has to stay directly runnable there.
@@ -251,6 +308,9 @@ export class Orchestrator {
         "A workspace needs an opening prompt describing the whole task; it is the only instruction the worker gets to start from.",
       );
     }
+
+    // Before any git work: a session past its budget starts nothing new.
+    this.assertSessionBudget();
     const repoRoot = await this.deps.repoRoot();
     if (!repoRoot) {
       throw new Error("No git repository is open, so there is nothing to create a worktree from.");
@@ -297,6 +357,9 @@ export class Orchestrator {
         `[omp] orchestrator: setup skipped for ${record.name} — ompcode.workspaceSetup is "never"`,
       );
     }
+    // The first step of the pipeline is having been created.
+    this.stages.set(record.id, "created");
+    this.startedAt.set(record.id, Date.now());
     return await this.statusOf(record);
   }
 
@@ -335,6 +398,14 @@ export class Orchestrator {
     if (!message) {
       throw new Error("The message is empty; there is nothing to send.");
     }
+
+    // The cost gate comes before the session is even touched: a spent
+    // workspace must not be reopened only to be refused afterwards.
+    const budget = this.budgetOf(record, this.deps.sessionFor(record.id)?.snapshot().cost ?? 0);
+    if (budget.over) {
+      throw new Error(budget.message);
+    }
+    this.assertSessionBudget();
     const session = await this.ensureSession(record);
     // A workspace in `needs_input` is blocked inside a tool call on a modal
     // approval dialog. Nothing sent from here can clear it — the only thing
@@ -377,9 +448,21 @@ export class Orchestrator {
     timeoutMs: number;
     onProgress?: (s: WorkspaceStatus[]) => void;
     signal?: AbortSignal;
-  }): Promise<{ statuses: WorkspaceStatus[]; timedOut: boolean; unknownIds: string[] }> {
+  }): Promise<{ statuses: WorkspaceStatus[]; timedOut: boolean; unknownIds: string[]; reason?: "over_budget" }> {
     const until = a.until ?? "idle";
     const { ids, unknown } = this.resolveWaitIds(a.ids);
+
+    // A session past its budget has nothing a wait can resolve: return at
+    // once instead of blocking, and say so — nothing should spend more.
+    const sessionLimit = this.sessionLimitUsd();
+    if (sessionLimit > 0 && this.sessionCostUsd() >= sessionLimit) {
+      return {
+        statuses: await this.richStatuses(ids),
+        timedOut: false,
+        unknownIds: unknown,
+        reason: "over_budget",
+      };
+    }
 
     // Read straight from the manager on every check: a workspace deleted while
     // we wait must drop out of the predicate rather than keep it unsatisfiable.
@@ -430,6 +513,7 @@ export class Orchestrator {
   }): Promise<{ status: WorkspaceStatus; text?: string; truncated: boolean }> {
     const record = this.require(a.id);
     const changes = await workspaceDiff(record.worktreePath, record.baseSha);
+    this.advanceStage(record.id, "diffed");
     const status = await this.statusOf(record, { diff: changes, merge: true });
     if (a.statOnly === true) {
       return { status, truncated: false };
@@ -481,6 +565,9 @@ export class Orchestrator {
     this.deps.output.appendLine(
       `[omp] orchestrator: verify ${record.name} → ${result.ok ? "ok" : "failed"} (exit ${String(result.exitCode)}${result.timedOut ? ", timed out" : ""})`,
     );
+    if (result.ok) {
+      this.advanceStage(record.id, "verified");
+    }
     return result;
   }
 
@@ -509,6 +596,9 @@ export class Orchestrator {
     this.deps.output.appendLine(
       `[omp] orchestrator: merge ${record.name} → ${result.merged ? "merged" : "refused"}: ${result.message}`,
     );
+    if (result.merged) {
+      this.advanceStage(record.id, "merged");
+    }
     return result;
   }
 
@@ -566,6 +656,11 @@ export class Orchestrator {
     // already been answered above, and a modal in an unattended run is a hang.
     await this.deps.manager.remove(record.id, { deleteBranch: a.deleteBranch, force: true });
     this.deps.output.appendLine(`[omp] orchestrator: deleted ${record.name}`);
+    // Forget its in-memory progress: a recycled id must not re-enter the
+    // board carrying a stage, a start time or a spent-abort from before.
+    this.stages.delete(record.id);
+    this.startedAt.delete(record.id);
+    this.budgetAborted.delete(record.id);
   }
 
   // ---------------------------------------------------------------- internals
@@ -586,6 +681,95 @@ export class Orchestrator {
     // Clamped rather than trusted: the setting is user-editable JSON, and a 0
     // there would make every create refuse with no way to see why.
     return Math.min(MAX_MAX_WORKSPACES, Math.max(MIN_MAX_WORKSPACES, Math.floor(raw)));
+  }
+
+  /**
+   * The two budget caps, re-read on every use and clamped to "off" when
+   * absent or nonsense: a mis-typed setting must degrade to no limit, not
+   * to everything refusing.
+   */
+  private costLimits(): { perWorkspaceUsd: number; perSessionUsd: number } {
+    const raw = this.deps.costLimits?.();
+    const limit = (value: unknown): number =>
+      typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+    return { perWorkspaceUsd: limit(raw?.perWorkspaceUsd), perSessionUsd: limit(raw?.perSessionUsd) };
+  }
+
+  /** The session-wide cap in dollars; 0 means the limit is off. */
+  sessionLimitUsd(): number {
+    return this.costLimits().perSessionUsd;
+  }
+
+  /**
+   * What the whole session has spent: the orchestrator's own chat (through
+   * the callback, 0 when the host wires none) plus every workspace.
+   */
+  sessionCostUsd(): number {
+    return sessionTotal(
+      this.deps.sessionCostUsd?.() ?? 0,
+      this.deps.manager.list().map((record) => ({
+        cost: this.deps.sessionFor(record.id)?.snapshot().cost ?? 0,
+      })),
+    );
+  }
+
+  /** The session spend and cap, for tool output; a 0 limit means off. */
+  sessionBudget(): { costUsd: number; limitUsd: number } {
+    return { costUsd: this.sessionCostUsd(), limitUsd: this.sessionLimitUsd() };
+  }
+
+  /**
+   * Refuse a create or a prompt with the numbers in the message: a model
+   * told only "over budget" would retry the same call until the turn dies.
+   */
+  private assertSessionBudget(): void {
+    const limit = this.sessionLimitUsd();
+    if (limit <= 0) {
+      return;
+    }
+    const total = this.sessionCostUsd();
+    if (total >= limit) {
+      throw new Error(
+        `The session has spent ${dollars(total)} of its ${dollars(limit)} cost limit, so no workspace work is started or sent. ` +
+          "Report the run to the human and wait; the limit is the ompcode.costLimitPerSessionUsd setting, and retrying does not lower the total.",
+      );
+    }
+  }
+
+  /**
+   * The per-workspace verdict on one cost reading, plus the one-shot abort:
+   * the first refresh that sees a workspace at its limit stops its agent,
+   * and every later one only reports.
+   */
+  private budgetOf(
+    record: WorkspaceRecord,
+    costUsd: number,
+  ): { over: boolean; limitUsd: number; message: string } {
+    const limitUsd = this.costLimits().perWorkspaceUsd;
+    const { over } = evaluateBudget({ costUsd, limitUsd });
+    if (!over) {
+      return { over: false, limitUsd, message: "" };
+    }
+    if (!this.budgetAborted.has(record.id)) {
+      this.budgetAborted.add(record.id);
+      this.deps.abortTurn?.(record.id);
+      this.deps.output.appendLine(
+        `[omp] orchestrator: ${record.name} is over its cost limit (${dollars(costUsd)} of ${dollars(limitUsd)})`,
+      );
+    }
+    return {
+      over: true,
+      limitUsd,
+      message: `workspace ${record.name} spent ${dollars(costUsd)} of its ${dollars(limitUsd)} limit; raise ompcode.costLimitPerWorkspaceUsd or delete the workspace`,
+    };
+  }
+
+  /** Stages only advance: a re-run diff cannot demote a merged workspace. */
+  private advanceStage(id: string, stage: BoardStage): void {
+    const current = this.stages.get(id);
+    if (current === undefined || STAGE_ORDER[stage] > STAGE_ORDER[current]) {
+      this.stages.set(id, stage);
+    }
   }
 
   /**
@@ -661,6 +845,29 @@ export class Orchestrator {
       files: 0,
       setupState: record.setupState,
     };
+
+    // Pipeline bookkeeping: the first time a workspace is seen working it
+    // advances, and whatever stage was reached rides along on every row.
+    if (status.state === "working") {
+      this.advanceStage(record.id, "working");
+    }
+    const stage = this.stages.get(record.id);
+    if (stage !== undefined) {
+      status.stage = stage;
+    }
+    const started = this.startedAt.get(record.id);
+    if (started !== undefined) {
+      status.startedAt = started;
+    }
+
+    // The per-workspace budget, evaluated on every status built: this is the
+    // one place the over-budget flags and the one-shot abort live.
+    const budget = this.budgetOf(record, status.cost);
+    if (budget.over) {
+      status.overBudget = true;
+      status.costLimitUsd = budget.limitUsd;
+      status.lastError = budget.message;
+    }
 
     if (opts?.diff) {
       const changes =
