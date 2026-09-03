@@ -405,3 +405,54 @@ test("the notice is defined after the surfaces it reads", () => {
   const notice = extensionSrc.indexOf("const askProcessesMode = (existing: number): void =>");
   assert.ok(panel > -1 && notice > panel, "askProcessesMode comes after boardEditor");
 });
+
+// --------------------------------------------------- repaint discipline
+
+test("an unchanged snapshot does not touch the list", () => {
+  // The host pushes every 2 s whether or not anything moved. Every row is
+  // focusable, hoverable and carries two action buttons, so an unconditional
+  // rewrite drops keyboard focus, resets the scroll, cancels a hovered tooltip
+  // and swallows a click that straddles the repaint.
+  const column = columnSource();
+  assert.match(column, /var procsListHtml = "";/);
+  assert.match(column, /if \(html !== procsListHtml\) \{\s*\n\s*redrawProcsList\(html\);/);
+  assert.match(column, /procsListHtml = html;/, "and the cache is what was actually written");
+});
+
+test("a redraw carries the scroll and the keyboard back across", () => {
+  const column = columnSource();
+  assert.match(column, /var scroll = procsListEl\.scrollTop;/);
+  assert.match(column, /procsListEl\.scrollTop = scroll;/);
+  assert.match(column, /procsRowId\(active\)/, "the focused row is identified before the rewrite");
+  // A focused action comes back as that action: landing on the row instead
+  // would move Tab order under the reader.
+  assert.match(column, /keptAct \? row\.querySelector\('\[data-pc-act="' \+ keptAct \+ '"\]'\) : row/);
+  assert.match(column, /if \(target && target\.focus\) target\.focus\(\);/);
+});
+
+test("a hidden retained tab repaints nothing", () => {
+  // retainContextWhenHidden keeps the webview alive, so readiness alone is not
+  // enough — an ungated push rebuilt the column behind another tab.
+  assert.match(sessionSrc, /if \(!\(this\.callbacks\.isVisible\?\.\(\) \?\? true\)\) \{\s*\n\s*return;/);
+  // …and the way back is the view-state repaint, not the next change event.
+  assert.match(extensionSrc, /session\.refreshBoard\(\);/);
+});
+
+// ------------------------------------------------------------ a11y
+
+test("the collapse toggle keeps its name when its label is hidden", () => {
+  // Both collapse paths hide the text span, leaving an aria-hidden chevron as
+  // the only child — and the toggle is then the only control in the rail.
+  const column = columnSource();
+  assert.match(column, /class="pc-toggle" aria-expanded="true"'\s*\n\s*\+ ' aria-label="' \+ esc\(t\("Processes"\)\)/);
+  assert.match(mainCss, /\.pc\.pc-collapsed \.pc-toggle span:not\(\.pc-chev\) \{ display: none; \}/);
+});
+
+test("a row keeps its fill while its own action button holds focus", () => {
+  // :focus-visible drops off the row the moment focus moves to the ■ or ✕
+  // inside it, and .pc-acts would then paint the hover colour over an
+  // unhighlighted row — the artefact board.css fixes with the same pairing.
+  assert.match(mainCss, /\.pc-row:hover, \.pc-row:focus-within \{ background:/);
+  assert.match(mainCss, /\.pc-row:focus-visible \{ outline:/, "the keyboard ring stays separate");
+  assert.match(boardCss, /\.row:hover, \.row:focus-within \{ background:/, "board.css agrees");
+});

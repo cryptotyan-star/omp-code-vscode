@@ -788,9 +788,17 @@ export class OmpSession implements vscode.Disposable {
    * faster, and a tab must not repaint its column on every one of them.
    */
   private pushBoard(): void {
-    // `postBoard` is deliberately not guarded on readiness: the `ready` handler
-    // calls it directly, and that first push has to land.
+    // `postBoard` is deliberately not guarded here: the `ready` handler calls
+    // it directly, and that first push has to land.
+    //
+    // Visibility matters as much as readiness. A retained hidden tab keeps its
+    // webview alive, so an ungated push had it rebuilding its column on the
+    // poll's cadence behind another tab; `refreshBoard()` repaints it on the
+    // way back instead.
     if (!this.boardSub || !this.webview || !this.webviewReady) {
+      return;
+    }
+    if (!(this.callbacks.isVisible?.() ?? true)) {
       return;
     }
     if (this.boardFlush) {

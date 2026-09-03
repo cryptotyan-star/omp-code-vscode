@@ -2,7 +2,7 @@
   "name": "omp-code",
   "displayName": "OMP Code",
   "description": "%extension.description%",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "publisher": "cryptotyan-star",
   "author": "BorisNers",
   "license": "MIT",

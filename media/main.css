@@ -2651,7 +2651,10 @@ body[data-platform="android"] #drop-overlay {
 }
 
 .pc-row.pc-child { padding-left: 16px; }
-.pc-row:hover, .pc-row:focus-visible { background: var(--vscode-list-hoverBackground, var(--input-bg)); }
+/* :focus-within, not :focus-visible — tabbing onto a row's own ■ or ✕ moves
+   focus to the button, and the row would drop its fill while .pc-acts kept
+   painting the hover colour over the clock. Same pairing board.css uses. */
+.pc-row:hover, .pc-row:focus-within { background: var(--vscode-list-hoverBackground, var(--input-bg)); }
 .pc-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .pc-stripe {

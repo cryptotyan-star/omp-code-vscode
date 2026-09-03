@@ -922,7 +922,11 @@
     procsEl.setAttribute("aria-label", t("Processes"));
     procsEl.innerHTML =
       '<div class="pc-head">'
-      + '<button type="button" class="pc-toggle" aria-expanded="true">'
+      // The name is on the element, not only in the span: both collapsed
+      // states hide that span, and the toggle is then the single control left
+      // in the rail — and the only way back out of it.
+      + '<button type="button" class="pc-toggle" aria-expanded="true"'
+      + ' aria-label="' + esc(t("Processes")) + '">'
       + '<span class="pc-chev" aria-hidden="true">›</span>'
       + "<span>" + esc(t("Processes")) + "</span>"
       + "</button>"
@@ -1040,6 +1044,40 @@
     } catch (e) { /* a port with no storage simply forgets the preference */ }
   }
 
+  /** Markup currently in .pc-list, so an unchanged push costs nothing. */
+  var procsListHtml = "";
+
+  /**
+   * Replace the list and put back what the rewrite would otherwise throw away:
+   * where the reader had scrolled to, and which row — or which of that row's
+   * actions — held the keyboard.
+   */
+  function redrawProcsList(html) {
+    var scroll = procsListEl.scrollTop;
+    var active = document.activeElement;
+    var keptId = active && active.closest ? procsRowId(active) : null;
+    var keptAct = active && active.dataset ? active.dataset.pcAct : undefined;
+
+    procsListEl.innerHTML = html;
+    procsListHtml = html;
+
+    // CSP forbids inline style attributes; the stripe width goes through the
+    // CSSOM, exactly as the board renderer does it.
+    var painted = procsListEl.querySelectorAll(".pc-row");
+    for (var i = 0; i < painted.length; i++) {
+      painted[i].style.setProperty("--pc-p", painted[i].dataset.pcP + "%");
+    }
+
+    procsListEl.scrollTop = scroll;
+    if (!keptId) return;
+    var row = procsListEl.querySelector('[data-pc-id="' + keptId.replace(/"/g, '\\"') + '"]');
+    if (!row) return;
+    // A focused action button comes back as that same action, not as the row:
+    // landing on the row would move Tab order under the reader's fingers.
+    var target = keptAct ? row.querySelector('[data-pc-act="' + keptAct + '"]') : row;
+    if (target && target.focus) target.focus();
+  }
+
   function renderProcs(snapshot, selfId) {
     procsSnapshot = snapshot && Array.isArray(snapshot.rows) ? snapshot : { rows: [] };
     procsSelfId = typeof selfId === "string" && selfId ? selfId : null;
@@ -1051,16 +1089,18 @@
     // The orchestrator is not one of the processes the empty state is about:
     // keying both on `rows.length` left an unexplained blank list whenever the
     // orchestrator was running and no workspace had been cut yet.
-    procsListEl.innerHTML = lead.map(pcRowHtml).join("")
+    var html = lead.map(pcRowHtml).join("")
       + (kids.length
         ? kids.map(pcRowHtml).join("")
         : '<div class="pc-empty"><div>' + esc(t("No processes yet")) + "</div><div class=\"pc-empty-sub\">"
           + esc(t("Workspaces the orchestrator starts will appear here.")) + "</div></div>");
-    // CSP forbids inline style attributes; the stripe width goes through the
-    // CSSOM, exactly as the board renderer does it.
-    var painted = procsListEl.querySelectorAll(".pc-row");
-    for (var i = 0; i < painted.length; i++) {
-      painted[i].style.setProperty("--pc-p", painted[i].dataset.pcP + "%");
+    // The host pushes on a 2 s timer whether or not anything moved, and every
+    // row is focusable and hoverable. Rewriting identical markup would drop
+    // keyboard focus, reset the scroll, cancel a hovered tooltip and — when a
+    // repaint lands between mousedown and mouseup — swallow the click on a
+    // row's ■ or ✕ outright. On an idle board this skips the write entirely.
+    if (html !== procsListHtml) {
+      redrawProcsList(html);
     }
     var counts = procsSnapshot.counts || {};
     var needs = (counts.error || 0) + (counts.waiting || 0);
