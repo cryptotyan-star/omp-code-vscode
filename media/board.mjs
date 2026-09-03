@@ -19,9 +19,13 @@ const ICON = {
   budget: '<svg viewBox="0 0 24 24"><path d="M12 4v16M15.5 7c0-1.7-1.6-2.6-3.5-2.6S8.5 5.3 8.5 7c0 3.5 7 1.9 7 5.5 0 1.7-1.6 2.6-3.5 2.6S8.5 14.2 8.5 12.5"/></svg>',
 };
 
+// The VS Code preamble hands out its API exactly once per webview: a second
+// `acquireVsCodeApi()` throws. boardPanel.mjs imports this module, so this is
+// the single acquisition both renderers share — the panel imports `post`
+// rather than acquiring again.
 const vscodeApi = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : undefined;
 
-function post(msg) {
+export function post(msg) {
   if (vscodeApi) {
     vscodeApi.postMessage(msg);
   }
@@ -80,8 +84,10 @@ function subText(row, snap) {
     const total = snap && Array.isArray(snap.rows)
       ? snap.rows.filter((r) => r.kind === "workspace").length
       : 0;
-    const done = snap && snap.counts ? snap.counts.done || 0 : 0;
-    return t("{0} of {1} merged", done, total);
+    // `merged` is the pipeline's last stage; `done` is a bar, and a workspace
+    // can read as done without its branch having landed.
+    const merged = snap && snap.counts ? snap.counts.merged || 0 : 0;
+    return t("{0} of {1} merged", merged, total);
   }
   switch (row.bar) {
     case "done": return t("merged into base");

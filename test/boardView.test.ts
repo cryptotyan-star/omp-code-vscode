@@ -92,9 +92,19 @@ Object.defineProperty(globalThis, "document", {
 });
 const windowTarget = new EventTarget();
 Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget });
+// One acquisition per webview, exactly like VS Code's preamble: a permissive
+// stub let a second `acquireVsCodeApi()` at module scope pass here while the
+// real webview died on it, so the suite stayed green over a dead renderer.
+let apiAcquired = false;
 Object.defineProperty(globalThis, "acquireVsCodeApi", {
   configurable: true,
-  value: () => ({ postMessage: (msg: unknown) => posted.push(msg) }),
+  value: () => {
+    if (apiAcquired) {
+      throw new Error("An instance of the VS Code API has already been acquired");
+    }
+    apiAcquired = true;
+    return { postMessage: (msg: unknown) => posted.push(msg) };
+  },
 });
 
 // Dynamic on purpose: the module boots on import, so the stub DOM above must

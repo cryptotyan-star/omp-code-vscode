@@ -2,9 +2,9 @@
   "name": "omp-code",
   "displayName": "OMP Code",
   "description": "%extension.description%",
-  "version": "0.17.0",
+  "version": "0.21.0",
   "publisher": "cryptotyan-star",
-  "author": "Ilona Pushilina",
+  "author": "BorisNers",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -38,7 +38,8 @@
   "activationEvents": [
     "onView:ompcode.chat",
     "onView:ompcode.board",
-    "onWebviewPanel:ompcode.chatTab"
+    "onWebviewPanel:ompcode.chatTab",
+    "onWebviewPanel:ompcode.boardPanel"
   ],
   "contributes": {
     "viewsContainers": {
@@ -83,7 +84,8 @@
       },
       {
         "command": "ompcode.openBoard",
-        "title": "%command.openBoard.title%"
+        "title": "%command.openBoard.title%",
+        "icon": "$(multiple-windows)"
       },
       {
         "command": "ompcode.showHistory",
@@ -288,6 +290,11 @@
           "command": "ompcode.newSession",
           "when": "view == ompcode.chat",
           "group": "navigation"
+        },
+        {
+          "command": "ompcode.openBoard",
+          "when": "view == ompcode.board",
+          "group": "navigation@1"
         },
         {
           "command": "ompcode.workspace.create",
@@ -588,6 +595,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "%config.orchestratorTools.markdownDescription%"
+        },
+        "ompcode.askProcessesMode": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.askProcessesMode.markdownDescription%"
         },
         "ompcode.orchestratorMaxWorkspaces": {
           "type": "number",

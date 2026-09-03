@@ -112,9 +112,19 @@ Object.defineProperty(globalThis, "document", {
 });
 const windowTarget = new EventTarget();
 Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget });
+// One acquisition per webview, exactly like VS Code's preamble: a permissive
+// stub let a second `acquireVsCodeApi()` at module scope pass here while the
+// real webview died on it, so the suite stayed green over a dead renderer.
+let apiAcquired = false;
 Object.defineProperty(globalThis, "acquireVsCodeApi", {
   configurable: true,
-  value: () => ({ postMessage: (msg: unknown) => posted.push(msg) }),
+  value: () => {
+    if (apiAcquired) {
+      throw new Error("An instance of the VS Code API has already been acquired");
+    }
+    apiAcquired = true;
+    return { postMessage: (msg: unknown) => posted.push(msg) };
+  },
 });
 
 // Dynamic on purpose: the module boots on import, so the stub DOM above must
@@ -122,7 +132,11 @@ Object.defineProperty(globalThis, "acquireVsCodeApi", {
 await import("../media/boardPanel.mjs");
 
 function pushSnapshot(snapshot: unknown): void {
-  windowTarget.dispatchEvent(new MessageEvent("message", { data: { t: "board", snapshot } }));
+  // The host carries the base branch on every push; `data-base` is only the
+  // first paint, from a bind that happened before any workspace existed.
+  windowTarget.dispatchEvent(
+    new MessageEvent("message", { data: { t: "board", snapshot, baseBranch } }),
+  );
 }
 
 function pushMessage(msg: unknown): void {
@@ -474,6 +488,15 @@ test("every BoardBar renders in the tree and every editor style class exists", (
   assert.match(boardCss, /prefers-reduced-motion/, "reduced-motion handling stays");
   // The panel reuses the sidebar's row markup straight from board.mjs.
   assert.ok(panelSrc.includes('from "./board.mjs"'), "the panel imports the row renderer");
+  // …and the sender with it. A webview hands out its API once, and board.mjs
+  // acquires it on import: a second acquisition here throws at module scope,
+  // which killed the whole renderer before boot() ever ran.
+  assert.doesNotMatch(
+    panelSrc,
+    /acquireVsCodeApi\s*\(/,
+    "boardPanel.mjs must import post from board.mjs, not acquire the API again",
+  );
+  assert.match(panelSrc, /import\s*\{[^}]*\bpost\b[^}]*\}\s*from\s*["']\.\/board\.mjs["']/);
 });
 
 test("markup escapes row data in tabs, crumbs and the log", () => {
@@ -537,4 +560,46 @@ test("the host wires the command, the panel and the prompt route", () => {
   const nlsRu = JSON.parse(fs.readFileSync(path.join(root, "package.nls.ru.json"), "utf8")) as Record<string, string>;
   assert.equal(nls["command.openBoard.title"], "OMP Code: Open Process Board");
   assert.ok(nlsRu["command.openBoard.title"], "the Russian title exists");
+});
+
+test("a refused prompt is handed back to the composer instead of being lost", () => {
+  pushSnapshot(FULL_SNAPSHOT);
+  fire("click", click({ "[data-tab]": { dataset: { tab: "ws-1" } } }));
+
+  // Send: the composer clears optimistically, as it always did.
+  composerInput.value = "почини тесты";
+  fire("keydown", {
+    key: "Enter",
+    target: target({ ".composer .in": { dataset: { row: "ws-1" } } }),
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(composerInput.value, "", "the input clears on send");
+
+  // The host refuses it. The text comes back, so there is something to retry.
+  pushMessage({ t: "promptError", id: "ws-1", message: "over the per-workspace limit" });
+  assert.equal(composerInput.value, "почини тесты", "the refused text returns");
+
+  // It is handed back once: a later repaint must not resurrect it.
+  composerInput.value = "";
+  pushSnapshot(FULL_SNAPSHOT);
+  assert.equal(composerInput.value, "", "the hand-back does not repeat");
+});
+
+test("the base branch comes from the message, not a data-base fixed at bind time", () => {
+  // The panel is normally opened before any workspace exists, so <body> was
+  // bound with no branch at all; every push carries the live one.
+  const previous = baseBranch;
+  baseBranch = "";
+  try {
+    windowTarget.dispatchEvent(
+      new MessageEvent("message", {
+        data: { t: "board", snapshot: FULL_SNAPSHOT, baseBranch: "steer-in-chat" },
+      }),
+    );
+    assert.ok(el("panel-editor").innerHTML.includes("⎇ steer-in-chat"), "the pushed branch shows");
+    assert.ok(el("panel-status").innerHTML.includes("⎇ steer-in-chat"), "and reaches the status bar");
+  } finally {
+    baseBranch = previous;
+  }
 });

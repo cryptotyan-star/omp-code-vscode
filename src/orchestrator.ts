@@ -153,6 +153,16 @@ export interface OrchestratorDeps {
    * orchestrating model decides what to do.
    */
   abortTurn?(workspaceId: string): void;
+  /**
+   * Fired once, immediately before the first workspace of a run is cut, with
+   * how many this repository already has. The host uses it to offer the
+   * processes view — a run that nobody can see is a run nobody can stop.
+   *
+   * Deliberately not awaited and deliberately not a gate: a tool call parked
+   * on a dialog is a wedged agent when the human has walked away, and this
+   * question is about which window to open, not about permission to proceed.
+   */
+  onOrchestrationStart?(existing: number): void;
 }
 
 /** Fallback for `ompcode.orchestratorMaxWorkspaces`; mirrors the package.json default. */
@@ -259,6 +269,8 @@ export class Orchestrator {
   private readonly startedAt = new Map<string, number>();
   /** Ids already aborted for overspending; `abortTurn` fires once per workspace. */
   private readonly budgetAborted = new Set<string>();
+  /** One announcement per orchestrator, not one per workspace it cuts. */
+  private announcedStart = false;
 
   // Assigned in the body rather than as a parameter property: `node --test`
   // strips types without transforming and rejects parameter properties, and
@@ -324,6 +336,18 @@ export class Orchestrator {
       throw new Error(
         `Workspace limit reached: ${mine.length} of ${limit} allowed. Merge or delete one with workspace_delete, or raise the ompcode.orchestratorMaxWorkspaces setting.`,
       );
+    }
+
+    // First cut of the run: tell the host, so it can offer the processes view
+    // before rows start appearing in a window that is not open.
+    if (!this.announcedStart) {
+      this.announcedStart = true;
+      try {
+        this.deps.onOrchestrationStart?.(mine.length);
+      } catch (error: unknown) {
+        // A host that throws while asking must not cost the model its create.
+        this.deps.output.appendLine(`[omp] orchestration notice failed: ${String(error)}`);
+      }
     }
 
     // A worker nobody is watching cannot answer a modal approval dialog: the
@@ -858,6 +882,14 @@ export class Orchestrator {
     const started = this.startedAt.get(record.id);
     if (started !== undefined) {
       status.startedAt = started;
+    }
+
+    // A failure the agent already reported — a dead process, a refused model,
+    // a crashed turn — is the board's highest-precedence bar. Without this the
+    // red row, the needs-human dot and the error badge were unreachable: every
+    // broken worker painted as a quiet grey «простаивает».
+    if (info?.lastError) {
+      status.lastError = info.lastError;
     }
 
     // The per-workspace budget, evaluated on every status built: this is the

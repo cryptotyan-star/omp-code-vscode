@@ -28,6 +28,7 @@ import {
 import { CONFIG_PROVIDERS, KEYED_PROVIDERS, LOGIN_PROVIDERS } from "./providers";
 import { needsManualLoad, readInstructionFile } from "./instructionFiles";
 import { currentBundle, currentLanguage, t } from "./l10n.ts";
+import type { BoardSnapshot } from "./boardTypes";
 import { overlayArgs, writeAppendPrompt, writeOverlay } from "./profileOverlay";
 import { planRevert, revertStateHash } from "./revert";
 import {
@@ -72,6 +73,13 @@ const PROBE_STATE_KEY = "ompcode.probeResults";
  * paired phone as well as the webview, so the raw rate is not worth relaying.
  */
 const SUBAGENT_FLUSH_MS = 250;
+
+/**
+ * Coalescing window for the processes column, matching BOARD_FLUSH_MS in
+ * boardViewProvider.ts and boardPanel.ts. Every open chat tab holds one of
+ * these, so an unthrottled change event would cost one postMessage per tab.
+ */
+const BOARD_COLUMN_FLUSH_MS = 250;
 
 export const APPROVAL_MODES = ["always-ask", "write", "yolo"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
@@ -250,6 +258,23 @@ const PANEL_SLASH_COMMANDS: ReadonlySet<string> = new Set([
   "ompcode.remoteStop",
 ]);
 
+/**
+ * What a chat *tab* needs to draw its processes column. The sidebar chat never
+ * gets one — the sidebar already carries the board view right under it — so the
+ * feed is consulted only for sessions that own a tab id.
+ *
+ * Set once from activate: extension.ts already builds exactly this quintet for
+ * the two board surfaces, and a third consumer should share that one cache
+ * rather than start a second `orchestrator.list()` loop of its own.
+ */
+export interface BoardFeed {
+  snapshot(): BoardSnapshot;
+  onChange(listener: () => void): vscode.Disposable;
+  reveal(id: string): void;
+  stop(id: string): void;
+  remove(id: string): void;
+}
+
 export interface OmpSessionCallbacks {
   /** Asked by the webview to open a new chat tab (topbar ＋). */
   onOpenNewTab?: () => void;
@@ -259,6 +284,12 @@ export interface OmpSessionCallbacks {
   onState?: (state: unknown) => void;
   /** Bring this session's UI to the front (notification "Open chat"). */
   onReveal?: () => void;
+  /**
+   * True while this session's surface is on screen. Chat tabs are created with
+   * `retainContextWhenHidden`, so a backgrounded tab never detaches — without
+   * this the cost poll would keep ticking for every tab ever opened.
+   */
+  isVisible?: () => boolean;
   /** Close this session's UI surface — the board's per-row close action. */
   onClose?: () => void;
 }
@@ -390,6 +421,10 @@ export class OmpSession implements vscode.Disposable {
   /** A published session outlives a closed editor surface until Remote Control releases it. */
   private remoteLeaseCount = 0;
   private surfaceClosed = false;
+  /** Live only while an editor tab is attached and a feed exists. */
+  private boardSub: vscode.Disposable | undefined;
+  private boardFlush: NodeJS.Timeout | undefined;
+  private boardDirty = false;
   private fullyDisposed = false;
 
   // ------------------------------------------------------------- session board
@@ -430,6 +465,30 @@ export class OmpSession implements vscode.Disposable {
   private readonly sessionId = crypto.randomUUID();
   /** Change feed the session board listens to. */
   private static boardEmitter: vscode.EventEmitter<void> | undefined;
+
+  /** The processes column's data source; absent until activate installs it. */
+  private static boardFeed: BoardFeed | undefined;
+
+  /**
+   * Called once from activate, and again with `undefined` from deactivate: the
+   * static outlives the extension host's activation, so the closures over that
+   * activation's orchestrator and workspace manager have to be let go.
+   */
+  static useBoardFeed(feed: BoardFeed | undefined): void {
+    OmpSession.boardFeed = feed;
+  }
+
+  /** True while at least one chat tab is showing the column — gates the poll. */
+  static get boardColumnLive(): boolean {
+    for (const session of OmpSession.active) {
+      // Subscribed *and* on screen: a retained hidden tab keeps its listener,
+      // and repaints from `onDidChangeViewState` when it comes back.
+      if (session.boardSub !== undefined && (session.callbacks.isVisible?.() ?? true)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   private static boardChanges(): vscode.EventEmitter<void> {
     if (!OmpSession.boardEmitter) {
@@ -649,6 +708,10 @@ export class OmpSession implements vscode.Disposable {
     OmpSession.active.delete(this);
     this.messageSub?.dispose();
     this.messageSub = undefined;
+    // forceDispose() reaches here without going through detach(), which is the
+    // path a closed workspace chat takes — its board listener would otherwise
+    // stay in the host's listener set for the rest of the window's life.
+    this.unsubscribeBoard();
     this.webview = undefined;
     for (const timer of this.diagTimers.values()) {
       clearTimeout(timer);
@@ -693,6 +756,74 @@ export class OmpSession implements vscode.Disposable {
     this.messageSub = webview.onDidReceiveMessage((msg: WebviewMessage) => {
       void this.onWebviewMessage(msg);
     });
+    this.subscribeBoard();
+  }
+
+  /**
+   * A tab's processes column follows the same cache the board surfaces read.
+   * Only a tab subscribes: the sidebar chat sits directly above the board view,
+   * and a column there would draw the same rows twice in one panel.
+   */
+  private subscribeBoard(): void {
+    this.unsubscribeBoard();
+    if (!this.overrides.tabId || !OmpSession.boardFeed) {
+      return;
+    }
+    this.boardSub = OmpSession.boardFeed.onChange(() => this.pushBoard());
+  }
+
+  private unsubscribeBoard(): void {
+    this.boardSub?.dispose();
+    this.boardSub = undefined;
+    if (this.boardFlush) {
+      clearTimeout(this.boardFlush);
+      this.boardFlush = undefined;
+    }
+    this.boardDirty = false;
+  }
+
+  /**
+   * Trailing-edge throttle, the same 250 ms window the two board surfaces use:
+   * the poll ticks every two seconds but a busy run fires change events far
+   * faster, and a tab must not repaint its column on every one of them.
+   */
+  private pushBoard(): void {
+    // `postBoard` is deliberately not guarded on readiness: the `ready` handler
+    // calls it directly, and that first push has to land.
+    if (!this.boardSub || !this.webview || !this.webviewReady) {
+      return;
+    }
+    if (this.boardFlush) {
+      this.boardDirty = true;
+      return;
+    }
+    this.postBoard();
+    this.boardFlush = setTimeout(() => {
+      this.boardFlush = undefined;
+      if (this.boardDirty) {
+        this.boardDirty = false;
+        this.pushBoard();
+      }
+    }, BOARD_COLUMN_FLUSH_MS);
+  }
+
+  /** A hidden tab came back to the front: repaint its column. */
+  refreshBoard(): void {
+    this.pushBoard();
+  }
+
+  private postBoard(): void {
+    const feed = OmpSession.boardFeed;
+    if (!feed || !this.overrides.tabId) {
+      return;
+    }
+    this.post({
+      t: "board",
+      snapshot: feed.snapshot(),
+      // The tab's own workspace, so the column can mark the row the reader is
+      // already looking at instead of offering to reveal it.
+      ...(this.overrides.workspaceId ? { selfId: this.overrides.workspaceId } : {}),
+    });
   }
 
   /**
@@ -712,6 +843,7 @@ export class OmpSession implements vscode.Disposable {
   detach(): void {
     this.messageSub?.dispose();
     this.messageSub = undefined;
+    this.unsubscribeBoard();
     this.webview = undefined;
   }
 
@@ -1607,6 +1739,9 @@ export class OmpSession implements vscode.Disposable {
             },
           });
           await this.pushKeyStatus();
+          // Outside the throttle: the column would otherwise sit empty until
+          // the next change event, which on an idle board is the 2 s poll.
+          this.postBoard();
           this.post({
             t: "probe",
             results: this.probeResults(),
@@ -1673,6 +1808,28 @@ export class OmpSession implements vscode.Disposable {
         case "openNewTab":
           this.callbacks.onOpenNewTab?.();
           return;
+        // The processes column's three row actions. They route through the
+        // same feed the board surfaces use, so a click here and a click on the
+        // board row run the identical command — and a column on a session with
+        // no tab id (the sidebar chat) never draws rows to click in the first
+        // place.
+        case "boardReveal":
+        case "boardStop":
+        case "boardDelete": {
+          const feed = OmpSession.boardFeed;
+          const id = typeof msg.id === "string" ? msg.id : "";
+          if (!feed || !id || !this.overrides.tabId) {
+            return;
+          }
+          if (msg.t === "boardReveal") {
+            feed.reveal(id);
+          } else if (msg.t === "boardStop") {
+            feed.stop(id);
+          } else {
+            feed.remove(id);
+          }
+          return;
+        }
         case "runCommand": {
           const command = typeof msg.command === "string" ? msg.command : "";
           if (!PANEL_SLASH_COMMANDS.has(command)) {
@@ -3879,6 +4036,12 @@ export class OmpSession implements vscode.Disposable {
 </head>
 <body data-theme="${theme}">
 <div id="app"${tabId}>
+  <!-- The chat is one column of #app so a processes column can sit beside it
+       in an editor tab (main.mjs builds that column on the first board push;
+       the sidebar chat and the Android shell never get one and this wrapper
+       then lays out exactly as the bare stack did). The three fixed overlays
+       stay outside it, since they cover the whole surface, not just the chat. -->
+  <div class="chat-stack">
   <header class="topbar">
     <div class="topbar-title"><span class="spark">✳</span><span id="session-title">OMP Code</span></div>
     <div class="topbar-actions">
@@ -3918,6 +4081,7 @@ export class OmpSession implements vscode.Disposable {
     </div>
     <div id="proc-banner" class="proc-banner hidden"><span id="proc-text">${esc(t("Agent is not running."))}</span> <button id="btn-restart">${esc(t("Restart"))}</button></div>
   </footer>
+  </div>
   <div id="menu-holder"></div>
   <div id="toast-holder"></div>
 <div id="drop-overlay" class="hidden"><div><span class="drop-title">${esc(t("Drop files to attach"))}</span>${esc(t("Release to add them to the prompt."))}</div></div>

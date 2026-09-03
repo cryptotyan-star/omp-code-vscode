@@ -33,6 +33,11 @@ export function filterRemoteSessionMessage(
   // These frames contain booleans/labels, not key values, but are still part
   // of credential administration and stay behind the explicit elevated verb.
   if ((type === "keyStatus" || type === "deadKey") && !verbs.includes("credentials.manage")) return undefined;
+  // The processes column is a desktop-only surface — no phone renders one. This
+  // filter is default-allow, so without an explicit refusal the whole board
+  // snapshot rides out to any paired device: every workspace's name, branch,
+  // model, cost and last error, from a device scoped to a single chat.
+  if (type === "board") return undefined;
   if (type === "approvalResolved") {
     if (!verbs.includes("approve")) return undefined;
     if (

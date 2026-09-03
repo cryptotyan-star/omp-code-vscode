@@ -17,7 +17,12 @@
   // getHtml, so it is stored now rather than waiting for a host message that a
   // reload could beat. The sidebar view carries no id and is never restored.
   var tabId = document.getElementById("app")?.getAttribute("data-tab-id");
-  if (tabId) hostPort.setState({ tabId: tabId });
+  // Read before writing: setState replaces the whole object, so anything else
+  // kept there — the processes column's collapsed preference — has to be
+  // carried across rather than overwritten by the id.
+  var storedState = null;
+  try { storedState = hostPort.getState(); } catch (e) { storedState = null; }
+  if (tabId) hostPort.setState(Object.assign({}, storedState || {}, { tabId: tabId }));
   var remoteCapabilityVerbs = null;
 
   var REMOTE_UI_CAPABILITY = {
@@ -32,6 +37,10 @@
     compact: "session.manage", restart: "session.manage", newSession: "session.manage",
     openNewTab: "session.manage", getHistory: "session.manage", openSession: "session.manage",
     setApproval: "settings.manage", setProfileField: "settings.manage",
+    // Processes-column row actions. A phone never draws the column, but the
+    // verbs are mapped anyway: an unmapped verb is allowed by default, and
+    // deleting a worktree is not something a "view" pairing may do.
+    boardReveal: "view", boardStop: "prompt", boardDelete: "session.manage",
     login: "credentials.manage", setKeys: "credentials.manage", clearKey: "credentials.manage",
   };
 
@@ -748,6 +757,371 @@
       task: payload.task,
       parentToolCallId: payload.parentToolCallId,
     });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Processes column                                                    */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * The orchestrator and its workspaces, listed down the left edge of a chat
+   * *tab*. Only a tab ever receives `{ t: "board" }`: the sidebar chat sits
+   * directly above the board view and would draw the same rows twice, and the
+   * Android shell has no orchestrator at all — so the column is built lazily,
+   * on the first board message, and the shared shell needs no markup for it.
+   *
+   * Classes are `pc-` prefixed rather than reusing board.css: that stylesheet
+   * defines `.chip`, `.composer` and `.msg`, which the chat already owns, so
+   * linking it here would repaint the composer.
+   */
+  var procsEl = null;
+  var procsListEl = null;
+  var procsSnapshot = null;
+  var procsSelfId = null;
+  var procsCollapsed = !!(storedState && storedState.procsCollapsed);
+  /** Column width in px. Dragged by .pc-grip, clamped by clampProcsWidth. */
+  var PC_WIDTH_DEFAULT = 232;
+  var PC_WIDTH_MIN = 168;
+  var PC_WIDTH_MAX = 520;
+  var procsWidth = clampProcsWidth(storedState && storedState.procsWidth);
+
+  /**
+   * Never wider than half the tab: a chat squeezed under its own composer is
+   * worse than a narrow list, and a stored width outlives the window size it
+   * was chosen at.
+   */
+  function clampProcsWidth(value) {
+    var n = Math.round(Number(value));
+    if (!Number.isFinite(n) || n <= 0) n = PC_WIDTH_DEFAULT;
+    var room = typeof window !== "undefined" && window.innerWidth
+      ? Math.round(window.innerWidth / 2)
+      : PC_WIDTH_MAX;
+    return Math.max(PC_WIDTH_MIN, Math.min(n, Math.max(PC_WIDTH_MIN, Math.min(PC_WIDTH_MAX, room))));
+  }
+
+  function pcBar(row) {
+    var bar = row && typeof row.bar === "string" ? row.bar : "idle";
+    switch (bar) {
+      case "running": case "done": case "error": case "waiting": case "budget": return bar;
+      default: return "idle";
+    }
+  }
+
+  function pcBarLabel(bar) {
+    switch (bar) {
+      case "running": return t("running");
+      case "done": return t("done");
+      case "error": return t("error");
+      case "waiting": return t("waiting");
+      case "budget": return t("budget");
+      default: return t("idle");
+    }
+  }
+
+  function pcStageName(stage) {
+    switch (stage) {
+      case "created": return t("stage created");
+      case "working": return t("stage working");
+      case "diffed": return t("stage diffed");
+      case "verified": return t("stage verified");
+      case "merged": return t("stage merged");
+      default: return "";
+    }
+  }
+
+  function pcUsd(usd) {
+    return "$" + (Number(usd) || 0).toFixed(2);
+  }
+
+  /** Limits read "$5", not "$5.00"; cents survive when they exist. */
+  function pcLimit(usd) {
+    var n = Number(usd) || 0;
+    return "$" + (Number.isInteger(n) ? n : n.toFixed(2));
+  }
+
+  function pcTime(sec) {
+    if (sec === undefined || sec === null) return "";
+    var s = Math.max(0, Math.round(Number(sec) || 0));
+    return t("{0}m {1}s", String(Math.floor(s / 60)), String(s % 60).padStart(2, "0"));
+  }
+
+  /** Second line of a row, without the cost — that carries its own colour. */
+  function pcSub(row) {
+    var parts = [pcBarLabel(pcBar(row))];
+    if (row.kind === "orchestrator") {
+      // The host's own count, so the column and the board never disagree about
+      // how much of the run has landed.
+      var counts = procsSnapshot && procsSnapshot.counts ? procsSnapshot.counts : {};
+      var kids = procsSnapshot && Array.isArray(procsSnapshot.rows)
+        ? procsSnapshot.rows.filter(function (r) { return r.kind === "workspace"; })
+        : [];
+      parts.push(t("{0} of {1} merged", String(counts.merged || 0), String(kids.length)));
+    } else {
+      var stage = pcStageName(row.stage);
+      parts.push(stage || (row.branch ? "⎇ " + row.branch : ""));
+    }
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  /** `$0.42`, or `$0.42 / $5` where the host set a per-workspace limit. */
+  function pcCost(row) {
+    return row.costLimitUsd !== undefined
+      ? pcUsd(row.costUsd) + " / " + pcLimit(row.costLimitUsd)
+      : pcUsd(row.costUsd);
+  }
+
+  function pcRowHtml(row) {
+    var bar = pcBar(row);
+    var child = row.kind === "workspace";
+    var self = child && procsSelfId && row.id === procsSelfId;
+    var progress = Math.max(0, Math.min(100, Math.round(Number(row.progress) || 0)));
+    var who = row.kind === "orchestrator"
+      ? ' <span class="pc-who">· ' + esc(t("orchestrator")) + "</span>"
+      : (self ? ' <span class="pc-who">· ' + esc(t("this tab")) + "</span>" : "");
+    var clock = pcTime(row.elapsedSec);
+    var title = row.lastError || row.lastText || "";
+    // Stop only while there is something live to stop; the tab's own workspace
+    // offers neither — closing your own chat from inside it is a trap.
+    var acts = child && !self
+      ? '<span class="pc-acts">'
+        + (bar === "running" || bar === "waiting"
+          ? '<button type="button" class="pc-act" data-pc-act="stop" title="' + esc(t("Stop")) + '" aria-label="' + esc(t("Stop")) + '">■</button>'
+          : "")
+        + '<button type="button" class="pc-act" data-pc-act="delete" title="' + esc(t("Delete")) + '" aria-label="' + esc(t("Delete")) + '">✕</button>'
+        + "</span>"
+      : "";
+    return '<div class="pc-row is-' + bar + (child ? " pc-child" : "") + (self ? " pc-self" : "")
+      + (row.needsHuman ? " pc-needs-human" : "")
+      + '" data-pc-id="' + esc(row.id) + '" data-pc-p="' + progress + '"'
+      + ' role="option" tabindex="0"' + (title ? ' title="' + esc(title) + '"' : "")
+      + ' aria-label="' + esc(row.name + ", " + pcBarLabel(bar)) + '">'
+      + '<span class="pc-stripe"><i></i></span>'
+      + '<span class="pc-dot"></span>'
+      + '<span class="pc-name">' + esc(row.name) + who + "</span>"
+      + '<span class="pc-sub"' + (row.model ? ' title="' + esc(row.model) + '"' : "") + ">"
+      + esc(pcSub(row))
+      + ' · <span class="pc-cost' + (row.overBudget ? " pc-spent" : "") + '">' + esc(pcCost(row)) + "</span>"
+      + "</span>"
+      + (clock ? '<span class="pc-clock">' + esc(clock) + "</span>" : "")
+      + acts
+      + "</div>";
+  }
+
+  /** Build the column and move the chat into a sibling stack beside it. */
+  function ensureProcsColumn() {
+    if (procsEl) return procsEl;
+    var app = document.getElementById("app");
+    var stack = app ? app.querySelector(".chat-stack") : null;
+    // Two gates, because neither is sufficient alone: the Android shell has no
+    // .chat-stack, and the sidebar chat has one but no tab id. The host already
+    // refuses to send a board message without a tab id; this is the same rule
+    // stated on the side that draws.
+    if (!tabId || !app || !stack) return null;
+    procsEl = document.createElement("aside");
+    procsEl.className = "pc";
+    procsEl.setAttribute("aria-label", t("Processes"));
+    procsEl.innerHTML =
+      '<div class="pc-head">'
+      + '<button type="button" class="pc-toggle" aria-expanded="true">'
+      + '<span class="pc-chev" aria-hidden="true">›</span>'
+      + "<span>" + esc(t("Processes")) + "</span>"
+      + "</button>"
+      + '<span class="pc-grow"></span>'
+      + '<span class="pc-count pc-all">0</span>'
+      + '<span class="pc-count pc-hot" hidden>0</span>'
+      + "</div>"
+      + '<div class="pc-list" role="listbox" aria-label="' + esc(t("Processes")) + '"></div>'
+      + '<div class="pc-foot"></div>'
+      // A separator, not a button: screen readers announce it as the boundary
+      // it is, and the arrow keys below are what the role already implies.
+      + '<div class="pc-grip" role="separator" aria-orientation="vertical" tabindex="0"'
+      + ' aria-label="' + esc(t("Resize the processes column")) + '"'
+      + ' title="' + esc(t("Drag to resize · double-click to reset")) + '"></div>';
+    procsListEl = procsEl.querySelector(".pc-list");
+    app.insertBefore(procsEl, stack);
+    app.classList.add("with-procs");
+    procsEl.addEventListener("click", onProcsClick);
+    procsEl.addEventListener("keydown", onProcsKeydown);
+    var grip = procsEl.querySelector(".pc-grip");
+    if (grip) {
+      grip.addEventListener("pointerdown", onGripDown);
+      grip.addEventListener("keydown", onGripKeydown);
+      grip.addEventListener("dblclick", function () { setProcsWidth(PC_WIDTH_DEFAULT); });
+    }
+    // A window that shrank below twice the stored width has to give the chat
+    // its room back; the clamp is re-applied rather than the width remembered.
+    window.addEventListener("resize", function () { applyProcsWidth(); });
+    applyProcsWidth();
+    applyProcsCollapsed();
+    return procsEl;
+  }
+
+  /* ------------------------------- width: drag, keyboard, persistence ----- */
+
+  function applyProcsWidth() {
+    if (!procsEl) return;
+    procsWidth = clampProcsWidth(procsWidth);
+    procsEl.style.setProperty("--pc-w", procsWidth + "px");
+    var grip = procsEl.querySelector(".pc-grip");
+    if (grip) {
+      grip.setAttribute("aria-valuenow", String(procsWidth));
+      grip.setAttribute("aria-valuemin", String(PC_WIDTH_MIN));
+      grip.setAttribute("aria-valuemax", String(PC_WIDTH_MAX));
+    }
+  }
+
+  /** Live during a drag; persisted once, on release. */
+  function setProcsWidth(next, persist) {
+    procsWidth = clampProcsWidth(next);
+    applyProcsWidth();
+    if (persist === false) return;
+    try {
+      var state = hostPort.getState();
+      hostPort.setState(Object.assign({}, state || {}, { procsWidth: procsWidth }));
+    } catch (e) { /* a port with no storage simply forgets the width */ }
+  }
+
+  function onGripDown(event) {
+    // A collapsed column has no width to drag; the toggle is the way back.
+    if (procsCollapsed || !procsEl) return;
+    event.preventDefault();
+    var startX = event.clientX;
+    var startWidth = procsWidth;
+    var app = document.getElementById("app");
+    if (app) app.classList.add("pc-resizing");
+    if (event.target.setPointerCapture) {
+      try { event.target.setPointerCapture(event.pointerId); } catch (e) { /* older webview */ }
+    }
+    var move = function (moveEvent) {
+      // Not persisted per frame: one write on release, not sixty a second.
+      setProcsWidth(startWidth + (moveEvent.clientX - startX), false);
+    };
+    var up = function () {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (app) app.classList.remove("pc-resizing");
+      setProcsWidth(procsWidth);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function onGripKeydown(event) {
+    var step = event.shiftKey ? 48 : 16;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setProcsWidth(procsWidth - step);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setProcsWidth(procsWidth + step);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setProcsWidth(PC_WIDTH_DEFAULT);
+    }
+  }
+
+  function applyProcsCollapsed() {
+    if (!procsEl) return;
+    procsEl.classList.toggle("pc-collapsed", procsCollapsed);
+    var toggle = procsEl.querySelector(".pc-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", procsCollapsed ? "false" : "true");
+  }
+
+  function setProcsCollapsed(next) {
+    procsCollapsed = !!next;
+    applyProcsCollapsed();
+    // Merged into the stored state rather than replacing it: the tab id lives
+    // there too, and it is the only thing a window reload hands back.
+    try {
+      var state = hostPort.getState();
+      hostPort.setState(Object.assign({}, state || {}, { procsCollapsed: procsCollapsed }));
+    } catch (e) { /* a port with no storage simply forgets the preference */ }
+  }
+
+  function renderProcs(snapshot, selfId) {
+    procsSnapshot = snapshot && Array.isArray(snapshot.rows) ? snapshot : { rows: [] };
+    procsSelfId = typeof selfId === "string" && selfId ? selfId : null;
+    var column = ensureProcsColumn();
+    if (!column || !procsListEl) return;
+    var rows = procsSnapshot.rows;
+    var kids = rows.filter(function (r) { return r.kind === "workspace"; });
+    var lead = rows.filter(function (r) { return r.kind === "orchestrator"; });
+    // The orchestrator is not one of the processes the empty state is about:
+    // keying both on `rows.length` left an unexplained blank list whenever the
+    // orchestrator was running and no workspace had been cut yet.
+    procsListEl.innerHTML = lead.map(pcRowHtml).join("")
+      + (kids.length
+        ? kids.map(pcRowHtml).join("")
+        : '<div class="pc-empty"><div>' + esc(t("No processes yet")) + "</div><div class=\"pc-empty-sub\">"
+          + esc(t("Workspaces the orchestrator starts will appear here.")) + "</div></div>");
+    // CSP forbids inline style attributes; the stripe width goes through the
+    // CSSOM, exactly as the board renderer does it.
+    var painted = procsListEl.querySelectorAll(".pc-row");
+    for (var i = 0; i < painted.length; i++) {
+      painted[i].style.setProperty("--pc-p", painted[i].dataset.pcP + "%");
+    }
+    var counts = procsSnapshot.counts || {};
+    var needs = (counts.error || 0) + (counts.waiting || 0);
+    var all = procsEl.querySelector(".pc-all");
+    if (all) all.textContent = String(kids.length);
+    var hot = procsEl.querySelector(".pc-hot");
+    if (hot) {
+      hot.hidden = needs === 0;
+      hot.textContent = String(needs);
+    }
+    var foot = procsEl.querySelector(".pc-foot");
+    if (foot) {
+      var total = pcUsd(procsSnapshot.totalCostUsd);
+      foot.textContent = procsSnapshot.sessionLimitUsd !== undefined
+        ? t("Total {0} (limit {1})", total, pcLimit(procsSnapshot.sessionLimitUsd))
+        : t("Total {0}", total);
+      foot.classList.toggle("pc-over", procsSnapshot.overSessionBudget === true);
+    }
+  }
+
+  function procsRowId(target) {
+    var node = target;
+    while (node && node !== procsEl) {
+      if (node.dataset && node.dataset.pcId) return node.dataset.pcId;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function onProcsClick(event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest(".pc-toggle")) {
+      setProcsCollapsed(!procsCollapsed);
+      return;
+    }
+    var act = target.closest("[data-pc-act]");
+    var id = procsRowId(target);
+    if (!id) return;
+    if (act) {
+      event.preventDefault();
+      event.stopPropagation();
+      post({ t: act.dataset.pcAct === "stop" ? "boardStop" : "boardDelete", id: id });
+      return;
+    }
+    // The row for this very tab is listed and focusable, but it is not a
+    // destination — revealing it would raise the chat the reader is inside.
+    if (procsSelfId && id === procsSelfId) return;
+    post({ t: "boardReveal", id: id });
+  }
+
+  function onProcsKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    // A focused stop or delete button handles its own keys; without this the
+    // same press both pressed the button and revealed the row behind it.
+    if (event.target && event.target.closest && event.target.closest("[data-pc-act]")) return;
+    var id = procsRowId(event.target);
+    if (!id) return;
+    if (procsSelfId && id === procsSelfId) return;
+    event.preventDefault();
+    post({ t: "boardReveal", id: id });
   }
 
   /* ------------------------------------------------------------------ */
@@ -3473,6 +3847,11 @@
           break;
         case "subagents":
           renderSubagents(m.snapshot);
+          break;
+        case "board":
+          // Only a chat tab is ever sent this; the sidebar view and the
+          // Android shell never receive it, so no column is ever built there.
+          renderProcs(m.snapshot, m.selfId);
           break;
         case "models":
           models = Array.isArray(m.models) ? m.models : [];

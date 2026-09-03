@@ -456,4 +456,4 @@ stdin/RPC как есть. По умолчанию телефон получае
 
 ## Лицензия
 
-[MIT](LICENSE) © Ilona Pushilina
+[MIT](LICENSE) © BorisNers

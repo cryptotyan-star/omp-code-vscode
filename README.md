@@ -456,4 +456,4 @@ that are expensive to rediscover. Release notes are in [CHANGELOG.md](CHANGELOG.
 
 ## License
 
-[MIT](LICENSE) © Ilona Pushilina
+[MIT](LICENSE) © BorisNers

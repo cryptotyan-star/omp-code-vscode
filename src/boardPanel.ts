@@ -30,7 +30,9 @@ const BOARD_FLUSH_MS = 250;
  * line. `HostToBoard` itself is untouched — board.mjs ignores anything whose
  * `t` it does not know.
  */
-type HostToBoardPanel = HostToBoard | { t: "promptError"; id: string; message: string };
+type HostToBoardPanel =
+  | (HostToBoard & { baseBranch?: string })
+  | { t: "promptError"; id: string; message: string };
 
 /**
  * The process board as an editor-area webview panel (`ompcode.boardPanel`):
@@ -147,7 +149,16 @@ export class BoardPanel implements vscode.Disposable {
   }
 
   private push(): void {
-    this.post({ t: "board", snapshot: this.deps.snapshot() });
+    // The base branch rides along with every snapshot rather than being baked
+    // into the HTML: the panel is normally opened *before* any workspace
+    // exists, and a `data-base` fixed at bind time then stayed empty for the
+    // life of the tab — no breadcrumb, no branch in the status bar.
+    const base = (this.deps.baseBranch() ?? "").trim();
+    this.post({
+      t: "board",
+      snapshot: this.deps.snapshot(),
+      ...(base ? { baseBranch: base } : {}),
+    });
   }
 
   /**
@@ -204,8 +215,8 @@ export class BoardPanel implements vscode.Disposable {
     // A custom accent travels as a data attribute; the renderer validates it
     // and applies it through the CSSOM, since the CSP forbids inline <style>.
     const accent = String(cfg.get<string>("accentColor", "") ?? "").trim();
-    // The base branch the workspaces share; the status bar and the
-    // breadcrumbs read it off <body>. Baked per (re)load like the accent.
+    // The base branch the workspaces share. First paint only — every snapshot
+    // carries the live value, which is what the renderer prefers.
     const base = (this.deps.baseBranch() ?? "").trim();
     const kind = vscode.window.activeColorTheme.kind;
     const dark =

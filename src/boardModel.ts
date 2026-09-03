@@ -70,7 +70,11 @@ export function buildBoardSnapshot(input: BoardInput): BoardSnapshot {
     rows.push({
       id: orch.id,
       kind: "orchestrator",
-      name: "Orchestrator",
+      // The renderer draws «<name> · оркестратор», so the name is the agent,
+      // not the role: an untranslated "Orchestrator" here read as the same
+      // word twice in two languages. Falls back only when the host has no
+      // model to name the row after.
+      name: orch.name?.trim() || "omp",
       model: orch.model,
       bar,
       progress: mergedPercent(workspaces),
@@ -109,6 +113,7 @@ export function buildBoardSnapshot(input: BoardInput): BoardSnapshot {
     });
   }
 
+  const workers = rows.filter((row) => row.kind === "workspace");
   const totalCostUsd =
     (orch?.costUsd ?? 0) + workspaces.reduce((sum, ws) => sum + ws.cost, 0);
   const sessionLimitUsd =
@@ -119,11 +124,18 @@ export function buildBoardSnapshot(input: BoardInput): BoardSnapshot {
     totalCostUsd,
     ...(sessionLimitUsd !== undefined ? { sessionLimitUsd } : {}),
     overSessionBudget: sessionLimitUsd !== undefined && totalCostUsd >= sessionLimitUsd,
+    // Workspace rows only. These numbers sit in the «Процессы» section header,
+    // beside a total that has always been the child count, and the orchestrator
+    // is not one of the processes that section lists: counting it there put a
+    // red "1" over "Процессов пока нет" every time the orchestrator asked a
+    // question with no workspaces running.
     counts: {
-      running: rows.filter((r) => r.bar === "running").length,
-      done: rows.filter((r) => r.bar === "done").length,
-      error: rows.filter((r) => r.bar === "error").length,
-      waiting: rows.filter((r) => r.bar === "waiting").length,
+      running: workers.filter((r) => r.bar === "running").length,
+      done: workers.filter((r) => r.bar === "done").length,
+      error: workers.filter((r) => r.bar === "error").length,
+      waiting: workers.filter((r) => r.bar === "waiting").length,
+      // The same predicate the orchestrator's own progress stripe uses.
+      merged: workspaces.filter((ws) => ws.stage === "merged").length,
     },
   };
 }

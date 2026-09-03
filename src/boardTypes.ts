@@ -30,7 +30,12 @@ export interface BoardSnapshot {
   totalCostUsd: number;
   sessionLimitUsd?: number;
   overSessionBudget: boolean;
-  counts: { running: number; done: number; error: number; waiting: number };
+  /**
+   * Workspace rows only. `merged` counts the pipeline's last stage rather than
+   * a bar, so every surface reports the same "N of M merged" instead of each
+   * recomputing it from `rows` and drifting.
+   */
+  counts: { running: number; done: number; error: number; waiting: number; merged: number };
 }
 
 /** The subset of a workspace status the board needs; orchestrator.ts's WorkspaceStatus satisfies it. */
@@ -51,7 +56,15 @@ export interface WorkspaceStatusLike {
 }
 
 export interface BoardInput {
-  orchestrator?: { id: string; model: string; costUsd: number; state: "starting" | "asks" | "working" | "idle"; startedAt?: number };
+  orchestrator?: {
+    id: string;
+    /** What to call the row; board.mjs appends the translated role suffix. */
+    name?: string;
+    model: string;
+    costUsd: number;
+    state: "starting" | "asks" | "working" | "idle";
+    startedAt?: number;
+  };
   workspaces: WorkspaceStatusLike[];
   limits: { perWorkspaceUsd: number; perSessionUsd: number };
   now: number;

@@ -363,4 +363,4 @@ Storage** — не в `settings.json` — и передаются процесс
 
 ## Лицензия
 
-[MIT](LICENSE) © Ilona Pushilina
+[MIT](LICENSE) © BorisNers

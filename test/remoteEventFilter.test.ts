@@ -59,3 +59,29 @@ test("remote session mirror preserves correlation/tool fields and gates approval
   assert.equal(filterRemoteSessionMessage(resolved, ["view"]), undefined);
   assert.deepEqual(filterRemoteSessionMessage(resolved, ["view", "approve"]), resolved);
 });
+
+test("the processes column's board snapshot never reaches a paired device", () => {
+  // The filter is default-allow — an unrecognised `t` is deep-copied through.
+  // A chat tab pushes this snapshot every couple of seconds, and it carries
+  // every *other* workspace's name, branch, model, cost and error text, so a
+  // phone scoped to one session would read the whole board through it.
+  const snapshot = {
+    t: "board",
+    selfId: "ws-1",
+    snapshot: {
+      rows: [
+        { id: "ws-2", kind: "workspace", name: "secret-branch-work", branch: "omp/secret", model: "kimi-code/k3", bar: "error", progress: 100, costUsd: 4.2, overBudget: false, needsHuman: true, lastError: "credential rejected" },
+      ],
+      totalCostUsd: 4.2,
+      overSessionBudget: false,
+      counts: { running: 0, done: 0, error: 1, waiting: 0, merged: 0 },
+    },
+  };
+  for (const verbs of [["view"], ["view", "prompt"], ["view", "approve", "session.manage"]]) {
+    assert.equal(
+      filterRemoteSessionMessage(snapshot, verbs as never),
+      undefined,
+      `board must be refused for ${verbs.join("+")}`,
+    );
+  }
+});

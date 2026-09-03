@@ -304,6 +304,10 @@ test("a restore can wake the extension on its own", () => {
   // The serializer is useless if nothing activates the extension for it: the
   // window reloads with no chat view focused and the panel is dropped.
   assert.ok(manifest.activationEvents.includes("onWebviewPanel:ompcode.chatTab"));
+  // Same for the process board tab: it has a serializer of its own, and
+  // `onWebviewPanel:` is not one of the events VS Code generates from a
+  // contribution point, so it has to be spelled out here too.
+  assert.ok(manifest.activationEvents.includes("onWebviewPanel:ompcode.boardPanel"));
 });
 
 test("new and restored panels go through the same binding", () => {
@@ -365,7 +369,15 @@ test("the session carries the tab id into the webview markup", () => {
 
 test("the renderer stores the tab id, which is all a reload hands back", () => {
   assert.match(mainSrc, /getAttribute\("data-tab-id"\)/);
-  assert.match(mainSrc, /hostPort\.setState\(\{ tabId: tabId \}\)/);
+  // The id has to reach the state slot; it no longer has that slot to itself,
+  // since the processes column keeps its collapsed preference there too. What
+  // must hold is that writing the id preserves whatever was already stored —
+  // a bare `setState({ tabId })` would drop the preference on every load.
+  assert.match(mainSrc, /hostPort\.setState\(\s*Object\.assign\([^)]*\{ tabId: tabId \}\)\s*\)/);
+  assert.match(mainSrc, /storedState = hostPort\.getState\(\)/);
+  const idWrite = mainSrc.indexOf("hostPort.setState(Object.assign(");
+  const idRead = mainSrc.indexOf("storedState = hostPort.getState()");
+  assert.ok(idRead > -1 && idRead < idWrite, "the read comes before the write that replaces it");
 });
 
 test("the host port exposes VS Code's own state slot", () => {

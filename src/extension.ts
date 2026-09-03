@@ -356,6 +356,8 @@ export function activate(context: vscode.ExtensionContext): void {
         panel.title = branchPrefix ? `${branchPrefix} · ${title}` : title;
       },
       onState: onSessionState,
+      // Gates the board cost poll: a retained hidden tab must not keep it alive.
+      isVisible: () => panel.visible,
       onReveal: () => {
         panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Beside);
       },
@@ -373,6 +375,14 @@ export function activate(context: vscode.ExtensionContext): void {
     if (session.orchestrates) {
       attachHostTools(session);
     }
+    // The poll skips hidden tabs, so one returning to the front would show its
+    // processes column as it was when it left. Same move BoardViewProvider
+    // makes in view.onDidChangeVisibility.
+    panel.onDidChangeViewState(() => {
+      if (panel.visible) {
+        session.refreshBoard();
+      }
+    });
     panel.onDidDispose(() => {
       chatPanels.delete(panel);
       panelWorkspaces.delete(panel);
@@ -858,6 +868,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // An over-budget workspace stops mid-turn through the same signal as a
     // manual stop; one with no live chat has nothing to abort.
     abortTurn: (workspaceId) => liveWorkspaceSession(workspaceId)?.abortTurn(),
+    onOrchestrationStart: (existing) => askProcessesMode(existing),
     // The user's setup policy, so a model asking for `runSetup: true` cannot
     // turn an operator's "never" into a licence to run the repository's setup
     // commands. The manager checks the explicit flag before the policy — which
@@ -1029,6 +1040,9 @@ export function activate(context: vscode.ExtensionContext): void {
       orchestrator: main
         ? {
             id: main.id,
+            // The row reads «<name> · оркестратор»: the model's own id is the
+            // closest thing the sidebar chat has to an agent name.
+            name: main.model,
             model: main.model,
             costUsd: main.cost,
             state: main.status,
@@ -1112,14 +1126,67 @@ export function activate(context: vscode.ExtensionContext): void {
     baseBranch: () => workspaces.list()[0]?.baseRef,
   });
 
-  // Costs tick upward without a registry or board event, so while either
-  // surface is visible a slow poll keeps the numbers honest; hidden, skipped.
-  const pollTimer = setInterval(() => {
+  /**
+   * Offer the processes view as a run begins.
+   *
+   * Not a gate: the orchestration is already under way by the time this shows,
+   * and a model parked on a dialog nobody is at is a dead turn. The question is
+   * only which window the run happens in — so the notice is fired and forgotten,
+   * and «Не спрашивать» writes the setting rather than being remembered in a
+   * variable a reload would drop.
+   */
+  const askProcessesMode = (existing: number): void => {
+    const cfg = vscode.workspace.getConfiguration("ompcode");
+    if (!cfg.get<boolean>("askProcessesMode", true)) {
+      return;
+    }
+    // Already looking at a board? Then there is nothing to offer.
     if (boardPanel.active || boardEditor.active) {
-      void refreshBoardStatuses().then(() => {
-        boardPanel.refresh();
-        boardEditor.refresh();
+      return;
+    }
+    const open = t("Open processes");
+    const notNow = t("Not now");
+    const never = t("Don't ask again");
+    void vscode.window
+      .showInformationMessage(
+        existing > 0
+          ? t("Orchestration is starting, alongside {0} existing workspace(s). Run it in processes mode?", String(existing))
+          : t("Orchestration is starting. Run it in processes mode?"),
+        open,
+        notNow,
+        never,
+      )
+      .then((choice) => {
+        if (choice === open) {
+          void vscode.commands.executeCommand("ompcode.openBoard");
+        } else if (choice === never) {
+          void cfg.update("askProcessesMode", false, vscode.ConfigurationTarget.Global);
+        }
       });
+  };
+
+  /**
+   * The third board surface: the processes column inside every chat *tab*.
+   * It reads the same cache and the same row actions as the two above, so a
+   * click in a column and a click on a board row run the identical command and
+   * no second `orchestrator.list()` loop exists to drift from this one.
+   */
+  OmpSession.useBoardFeed({
+    snapshot: boardSnapshot,
+    onChange: boardOnChange,
+    reveal: revealBoardRow,
+    stop: stopBoardRow,
+    remove: removeBoardRow,
+  });
+
+  // Costs tick upward without a registry or board event, so while any surface
+  // is visible a slow poll keeps the numbers honest; hidden, skipped. The
+  // columns are counted once, not once per tab — they all read this cache.
+  const pollTimer = setInterval(() => {
+    if (boardPanel.active || boardEditor.active || OmpSession.boardColumnLive) {
+      // One notify reaches all three surfaces — both board views and every
+      // chat tab's column are listeners — and each throttles on its own side.
+      void refreshBoardStatuses().then(notifyBoardListeners, notifyBoardListeners);
     }
   }, 2000);
   const boardPoll = new vscode.Disposable(() => clearInterval(pollTimer));
@@ -1818,5 +1885,8 @@ export async function deactivate(): Promise<void> {
   }
   // Stop every live session's omp process so we don't leave orphans on
   // extension deactivation (editor tabs + sidebar share OmpSession.active).
+  // Before the disposals: the last notifyBoard() on the way out must not reach
+  // back into a feed whose orchestrator is already gone.
+  OmpSession.useBoardFeed(undefined);
   OmpSession.forEachActive((session) => session.forceDispose());
 }

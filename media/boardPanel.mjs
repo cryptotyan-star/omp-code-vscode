@@ -7,12 +7,15 @@
 // sidebar, and { t: "prompt", id, text } from the composer. Selection lives
 // here: clicking a tree row or a tab selects it without touching the host.
 //
-// The row markup is imported from board.mjs verbatim. That module boots on
-// import but returns early when the document has no #tree element — this
-// panel's skeleton deliberately prefixes its ids (panel-tree, …), so the
-// sidebar renderer stays inert here.
+// The row markup — and the webview API sender — are imported from board.mjs.
+// That module boots on import but returns early when the document has no
+// #tree element: this panel's skeleton deliberately prefixes its ids
+// (panel-tree, …), so the sidebar renderer stays inert here. It also holds
+// the webview's one and only handle on the VS Code API — a second
+// acquisition throws at module scope — which is why `post` travels across
+// the import rather than being taken again here.
 
-import { rowHtml } from "./board.mjs";
+import { post, rowHtml } from "./board.mjs";
 import { plural, t } from "./l10n.mjs";
 
 // Pipeline order, left to right: создание → работа → diff → verify → merge.
@@ -27,14 +30,6 @@ const ICON = {
   idle: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>',
   budget: '<svg viewBox="0 0 24 24"><path d="M12 4v16M15.5 7c0-1.7-1.6-2.6-3.5-2.6S8.5 5.3 8.5 7c0 3.5 7 1.9 7 5.5 0 1.7-1.6 2.6-3.5 2.6S8.5 14.2 8.5 12.5"/></svg>',
 };
-
-const vscodeApi = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : undefined;
-
-function post(msg) {
-  if (vscodeApi) {
-    vscodeApi.postMessage(msg);
-  }
-}
 
 function esc(text) {
   return String(text ?? "")
@@ -90,11 +85,31 @@ function safeBar(bar) {
 
 let snapshot;
 let selectedId;
+/** Set by the host's board message; undefined until the first one arrives. */
+let pushedBase;
+/** True between compositionstart and compositionend on the composer input. */
+let composing = false;
+/** Text a refused prompt hands back, so the user can edit and retry it. */
+let returnedDraft;
 /** Prompt refusals (over budget, needs_input) shown as .tool.bad log lines. */
 const promptErrors = new Map();
 
 function rows() {
   return snapshot && Array.isArray(snapshot.rows) ? snapshot.rows : [];
+}
+
+/**
+ * The base branch. Every `{ t: "board" }` carries the live value; the
+ * `data-base` attribute is only the first paint, from before the host had a
+ * workspace to name — the panel is normally opened before any exists.
+ */
+function baseBranch() {
+  if (pushedBase !== undefined) {
+    return pushedBase;
+  }
+  return document.body && typeof document.body.getAttribute === "function"
+    ? String(document.body.getAttribute("data-base") || "").trim()
+    : "";
 }
 
 function rowById(id) {
@@ -164,10 +179,7 @@ function tabsHtml(selected) {
 }
 
 function crumbsHtml(row) {
-  const base =
-    document.body && typeof document.body.getAttribute === "function"
-      ? String(document.body.getAttribute("data-base") || "").trim()
-      : "";
+  const base = baseBranch();
   const parts = [];
   if (base) {
     parts.push(`<span>⎇ ${esc(base)}</span>`);
@@ -261,12 +273,22 @@ function renderEditor() {
   if (!editor) {
     return;
   }
-  // The poll repaints on a timer; a half-typed prompt must survive it.
+  // The poll repaints on a timer; a half-typed prompt must survive it. An
+  // in-flight IME composition cannot: re-templating the <input> under it drops
+  // the composed text, so the pane holds still until the composition ends.
+  if (composing) {
+    return;
+  }
   const live =
     typeof document.querySelector === "function"
       ? document.querySelector(".composer .in")
       : null;
   const draft = live && typeof live.value === "string" ? live.value : "";
+  // Assigning .value drops the caret to the end; these put it back where the
+  // typist left it, so a fix mid-word is not yanked away every two seconds.
+  const caretStart =
+    live && typeof live.selectionStart === "number" ? live.selectionStart : undefined;
+  const caretEnd = live && typeof live.selectionEnd === "number" ? live.selectionEnd : undefined;
   const draftRow = live && live.dataset ? live.dataset.row : undefined;
   const focused =
     live !== null &&
@@ -286,14 +308,31 @@ function renderEditor() {
     ${stagesHtml(row)}
     <div class="log">${logHtml(row)}${calloutHtml(row)}</div>
     ${composerHtml(row)}`;
-  if ((draft || focused) && draftRow === row.id && row.kind === "workspace") {
+  // A refusal comes back carrying the text it refused: the composer had
+  // already cleared optimistically, and losing the prompt to a budget message
+  // left the user nothing to retry from.
+  const handback = returnedDraft && returnedDraft.id === row.id ? returnedDraft.text : undefined;
+  returnedDraft = undefined;
+  const mine = draftRow === row.id;
+  if ((handback !== undefined || ((draft || focused) && mine)) && row.kind === "workspace") {
     const input = document.querySelector(`.composer .in[data-row="${row.id}"]`);
     if (input) {
-      if (draft) {
+      if (handback !== undefined) {
+        input.value = handback;
+      } else if (draft) {
         input.value = draft;
       }
-      if (focused && typeof input.focus === "function") {
-        input.focus();
+      if (handback !== undefined || focused) {
+        if (typeof input.focus === "function") {
+          input.focus();
+        }
+        if (
+          handback === undefined &&
+          caretStart !== undefined &&
+          typeof input.setSelectionRange === "function"
+        ) {
+          input.setSelectionRange(caretStart, caretEnd ?? caretStart);
+        }
       }
     }
   }
@@ -310,10 +349,7 @@ function statusHtml() {
   const done = counts.done || 0;
   const waiting = counts.waiting || 0;
   const err = counts.error || 0;
-  const base =
-    document.body && typeof document.body.getAttribute === "function"
-      ? String(document.body.getAttribute("data-base") || "").trim()
-      : "";
+  const base = baseBranch();
   const total = fmtUsd(snapshot ? snapshot.totalCostUsd : 0);
   const cost =
     snapshot && snapshot.sessionLimitUsd !== undefined
@@ -371,6 +407,9 @@ function closest(event, selector) {
 }
 
 /** Send the composer's text, if any, to the row it addresses. */
+/** The last prompt sent per row, held only until the host accepts or refuses. */
+const lastSent = new Map();
+
 function sendPrompt(id) {
   const input =
     typeof document.querySelector === "function"
@@ -381,6 +420,7 @@ function sendPrompt(id) {
     return;
   }
   input.value = "";
+  lastSent.set(id, text);
   post({ t: "prompt", id, text });
 }
 
@@ -484,15 +524,25 @@ function boot() {
     try {
       if (msg.t === "board" && msg.snapshot) {
         snapshot = msg.snapshot;
-        // A row that is running again took the prompt; its refusal is stale.
+        // Absent means "the host has no branch to name", which is a value —
+        // it clears a branch the last push had.
+        pushedBase = String(msg.baseBranch || "").trim();
+        // A row that is running again took the prompt; its refusal is stale,
+        // and so is the copy held back for a retry.
         for (const row of rows()) {
           if (row.bar === "running") {
             promptErrors.delete(row.id);
+            lastSent.delete(row.id);
           }
         }
         render();
       } else if (msg.t === "promptError" && typeof msg.id === "string") {
         promptErrors.set(msg.id, String(msg.message || ""));
+        const refused = lastSent.get(msg.id);
+        lastSent.delete(msg.id);
+        if (refused) {
+          returnedDraft = { id: msg.id, text: refused };
+        }
         render();
       }
     } catch (err) {
@@ -502,6 +552,14 @@ function boot() {
   });
   document.addEventListener("click", onClick);
   document.addEventListener("keydown", onKeydown);
+  // The repaint holds off while an IME is composing; the next snapshot, at
+  // most one poll away, draws the pane again.
+  document.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  document.addEventListener("compositionend", () => {
+    composing = false;
+  });
   syncTheme();
   applyAccent();
   if (typeof MutationObserver === "function" && document.body) {

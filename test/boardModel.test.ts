@@ -289,7 +289,7 @@ test("session budget trips at equality", () => {
   assert.equal(snap.overSessionBudget, true);
 });
 
-test("counts include the orchestrator row and skip idle and budget", () => {
+test("counts cover the workspace rows only, skipping idle and budget", () => {
   const snap = buildBoardSnapshot({
     orchestrator: orch({ state: "asks" }),
     workspaces: [
@@ -302,7 +302,19 @@ test("counts include the orchestrator row and skip idle and budget", () => {
     limits: LIMITS,
     now: NOW,
   });
-  assert.deepEqual(snap.counts, { running: 1, done: 1, error: 1, waiting: 1 });
+  // The orchestrator is asking, and it is deliberately absent from these
+  // numbers: they label the «Процессы» section, whose total counts children.
+  assert.deepEqual(snap.counts, { running: 1, done: 1, error: 1, waiting: 0, merged: 1 });
+});
+
+test("an orchestrator waiting alone leaves the process counts at zero", () => {
+  const snap = buildBoardSnapshot({
+    orchestrator: orch({ state: "asks" }),
+    workspaces: [],
+    limits: LIMITS,
+    now: NOW,
+  });
+  assert.deepEqual(snap.counts, { running: 0, done: 0, error: 0, waiting: 0, merged: 0 });
 });
 
 test("elapsedSec counts from startedAt and never goes negative", () => {
@@ -326,6 +338,6 @@ test("empty input produces an empty board", () => {
     rows: [],
     totalCostUsd: 0,
     overSessionBudget: false,
-    counts: { running: 0, done: 0, error: 0, waiting: 0 },
+    counts: { running: 0, done: 0, error: 0, waiting: 0, merged: 0 },
   });
 });

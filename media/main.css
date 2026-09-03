@@ -2493,3 +2493,327 @@ body[data-platform="android"] #drop-overlay {
   }
 
 }
+
+/* ------------------------------------------------------------------ */
+/* Processes column (chat tabs only)                                   */
+/* ------------------------------------------------------------------ */
+
+/* main.mjs builds .pc on the first board message and moves the chat into
+   .chat-stack beside it. Without a column the wrapper lays out exactly as the
+   bare stack did, which is what the sidebar view and the Android shell get.
+   Classes are pc- prefixed on purpose: board.css owns .chip, .composer and
+   .msg, which the chat already defines, so it is never linked here. */
+
+.chat-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+#app.with-procs {
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.pc {
+  --pc-run: var(--accent);
+  --pc-ok: var(--ok, #4ec9a6);
+  --pc-err: var(--vscode-errorForeground, #c94f4f);
+  --pc-wait: var(--vscode-editorWarning-foreground, #c79a2b);
+  --pc-glow: var(--glow);
+
+  flex: none;
+  /* Set by main.mjs from the dragged, clamped and persisted width. */
+  width: var(--pc-w, 232px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* The drag handle straddles the border rather than sitting beside it, so the
+   whole edge is grabbable without stealing a pixel from either side. */
+.pc-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pc-grip::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+
+.pc-grip:hover::after, .pc-grip:focus-visible::after { opacity: .7; }
+.pc-grip:focus-visible { outline: none; }
+#app.pc-resizing .pc-grip::after { opacity: 1; }
+
+/* While dragging: no text selection anywhere, and the cursor stays col-resize
+   even where the pointer has run off the handle. */
+#app.pc-resizing { cursor: col-resize; user-select: none; }
+#app.pc-resizing .pc-list, #app.pc-resizing .chat-stack { pointer-events: none; }
+
+/* Collapsed keeps the header readable as a vertical rail rather than hiding
+   the section entirely — a column you cannot find again is worse than a wide one. */
+.pc.pc-collapsed { width: 34px; }
+.pc.pc-collapsed .pc-grip { display: none; }
+.pc.pc-collapsed .pc-list,
+.pc.pc-collapsed .pc-foot,
+.pc.pc-collapsed .pc-toggle span:not(.pc-chev) { display: none; }
+.pc.pc-collapsed .pc-head { flex-direction: column; gap: 6px; padding: 8px 0; }
+.pc.pc-collapsed .pc-chev { transform: rotate(0deg); }
+
+.pc-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 6px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.pc-toggle:hover { color: var(--fg); }
+.pc-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.pc-chev {
+  display: inline-block;
+  transform: rotate(90deg);
+  transition: transform .15s ease;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.pc-grow { flex: 1; }
+
+.pc-count {
+  flex: none;
+  min-width: 16px;
+  text-align: center;
+  border-radius: 9px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--muted);
+  background: var(--input-bg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The total sits left of the alarm and keeps its width as the count grows,
+   so the two badges never shuffle sideways against each other. */
+.pc-count.pc-all { min-width: 18px; }
+
+/* Errors and questions are the one thing worth interrupting for. */
+.pc-count.pc-hot { background: var(--pc-err); color: #fff; }
+
+.pc-list { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
+
+/* One row: the coloured stripe along the top edge is the whole state language,
+   same as the board. --pc-c is set by the state class, --pc-p by main.mjs. */
+.pc-row {
+  --pc-c: transparent;
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  column-gap: 5px;
+  row-gap: 1px;
+  padding: 7px 8px 7px 6px;
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.pc-row.pc-child { padding-left: 16px; }
+.pc-row:hover, .pc-row:focus-visible { background: var(--vscode-list-hoverBackground, var(--input-bg)); }
+.pc-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+.pc-stripe {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--pc-c) 18%, transparent);
+}
+
+.pc-stripe > i {
+  display: block;
+  height: 100%;
+  width: var(--pc-p, 0%);
+  background: var(--pc-c);
+  transition: width .6s cubic-bezier(.2, .7, .2, 1);
+}
+
+.pc-row.is-done .pc-stripe > i,
+.pc-row.is-error .pc-stripe > i,
+.pc-row.is-budget .pc-stripe > i { width: 100%; }
+
+/* A question reads as a dashed bar: filled would claim progress it has not made. */
+.pc-row.is-waiting .pc-stripe > i {
+  width: 100%;
+  opacity: .75;
+  background: repeating-linear-gradient(90deg, var(--pc-c) 0 5px, transparent 5px 10px);
+}
+
+.pc-row.is-running .pc-stripe { box-shadow: 0 0 8px var(--pc-glow); }
+
+.pc-dot {
+  grid-row: 1 / 3;
+  align-self: start;
+  margin-top: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--pc-c, var(--muted));
+}
+
+.pc-row.is-running .pc-dot,
+.pc-row.is-done .pc-dot { background: var(--pc-c); }
+.pc-row.is-running .pc-dot { animation: pc-pulse 1.6s ease-in-out infinite; }
+
+/* Only a person can move these on, so they keep asking. */
+.pc-row.pc-needs-human .pc-dot { animation: pc-pulse 1.6s ease-in-out infinite; }
+
+@keyframes pc-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--pc-glow); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+
+.pc-row.is-running { --pc-c: var(--pc-run); --pc-glow: var(--glow); }
+.pc-row.is-done { --pc-c: var(--pc-ok); }
+.pc-row.is-error { --pc-c: var(--pc-err); }
+.pc-row.is-waiting { --pc-c: var(--pc-wait); }
+.pc-row.is-budget { --pc-c: var(--pc-wait); }
+.pc-row.is-idle { --pc-c: transparent; }
+.pc-row.is-idle .pc-name, .pc-row.is-idle .pc-sub, .pc-row.is-idle .pc-clock { color: var(--muted); }
+
+.pc-name {
+  grid-column: 2;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pc-who { color: var(--muted); }
+
+.pc-sub {
+  grid-column: 2;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The cost is its own element so an overspent workspace can shout without
+   repainting the whole sub-line. Scoped under .pc-sub: the totals footer uses
+   .pc-over for the same idea at session level, and the two must not fight. */
+.pc-cost { font-variant-numeric: tabular-nums; }
+.pc-sub .pc-cost.pc-spent { color: var(--pc-err); font-weight: 600; }
+
+.pc-clock {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: center;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The tab you are already in: still listed, never offered as a destination. */
+.pc-row.pc-self { cursor: default; background: var(--accent-wash); }
+.pc-row.pc-self:hover { background: var(--accent-wash); }
+
+/* Hover actions float over the clock and take the row's own fill, so they
+   never paint a mismatched patch over it. */
+.pc-acts {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  display: none;
+  gap: 2px;
+  border-radius: 4px;
+  background: var(--vscode-list-hoverBackground, var(--input-bg));
+}
+
+.pc-row:hover .pc-acts, .pc-row:focus-within .pc-acts { display: flex; }
+
+.pc-act {
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.pc-act:hover { background: var(--vscode-toolbar-hoverBackground, var(--widget-bg)); color: var(--fg); }
+.pc-act[data-pc-act="delete"]:hover { color: var(--pc-err); }
+.pc-act:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+.pc-empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pc-empty-sub { margin-top: 3px; font-size: 10.5px; opacity: .8; }
+
+.pc-foot {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pc-foot.pc-over { color: var(--pc-err); }
+
+/* A split editor can leave the tab under 520px, where 232px of column is more
+   than the chat can spare — the rail keeps the counts without the width. */
+@media (max-width: 520px) {
+  .pc { width: 34px; }
+  .pc .pc-grip { display: none; }
+  .pc .pc-list, .pc .pc-foot, .pc .pc-toggle span:not(.pc-chev) { display: none; }
+  .pc .pc-head { flex-direction: column; gap: 6px; padding: 8px 0; }
+  .pc .pc-chev { transform: rotate(0deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-stripe > i { transition: none; }
+  .pc-grip::after { transition: none; }
+  .pc-row.is-running .pc-dot, .pc-row.pc-needs-human .pc-dot { animation: none; }
+}
