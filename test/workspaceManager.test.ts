@@ -108,6 +108,17 @@ async function makeRepo(t: { after(fn: () => unknown): void }): Promise<string> 
   const repo = path.join(tmp, "repo");
   await fs.mkdir(repo);
   await git(["-c", "init.defaultBranch=main", "init", "-q", "."], { cwd: repo });
+  // Written into the repository, not passed per command: `mergeWorkspace`
+  // creates a merge commit of its own and deliberately does not force an
+  // identity onto it — a merge has to carry the user's. The `-c` spellings on
+  // this file's own commits made it look handled, and it was not: on a CI
+  // runner, which has no global identity and whose auto-detected fallback is
+  // an invalid `runner@…(none)`, git refused before writing MERGE_HEAD and the
+  // merge test failed with a phantom "left mid-merge". See
+  // test/workspaceMerge.test.ts, which has carried these three lines all along.
+  await git(["config", "user.email", "t@example.com"], { cwd: repo });
+  await git(["config", "user.name", "t"], { cwd: repo });
+  await git(["config", "commit.gpgsign", "false"], { cwd: repo });
   await fs.writeFile(path.join(repo, "a.txt"), "hello\n");
   await git(["add", "a.txt"], { cwd: repo });
   await git(["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "first"], {

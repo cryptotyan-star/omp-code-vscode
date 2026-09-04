@@ -798,17 +798,27 @@ async function mergeLocked(
           () => true,
           () => false,
         );
+        // Same distinction as the merge path: a rebase git refused to start
+        // leaves nothing to abort, and reporting it as mid-rebase would send a
+        // still-running agent's operator chasing a state that is not there.
+        const midRebase =
+          !aborted &&
+          (await cleanupWorktree(["rev-parse", "-q", "--verify", "REBASE_HEAD"]).then(
+            () => true,
+            () => false,
+          ));
         await unwind();
-        if (!aborted) {
+        if (midRebase) {
           // A worktree left mid-rebase is the worst thing this path can do to
           // a still-running agent, so it is never reported as a clean refusal.
           return withStashNote(
             failed(
               t(
-                "{0} could not be rebased onto {1}, and the rebase could not be aborted — {2} is left mid-rebase; run `git rebase --abort` there.",
+                "{0} could not be rebased onto {1} ({3}), and the rebase could not be aborted — {2} is left mid-rebase; run `git rebase --abort` there.",
                 a.branch,
                 a.baseRef,
                 a.worktreePath,
+                describeGitError(err),
               ),
               conflicts,
             ),
@@ -863,19 +873,33 @@ async function mergeLocked(
         // An abort that itself fails leaves MERGE_HEAD and a conflicted index
         // behind, so it is reported rather than swallowed: "the base is
         // unchanged" would be a lie in exactly that case.
+        //
+        // But the abort also fails when there was never a merge to abort. git
+        // refuses some merges outright — no committer identity, a rejecting
+        // hook — and then nothing was touched. Claiming a mid-merge there sends
+        // the operator to run `git merge --abort`, which fails too, while the
+        // real reason goes unsaid. So the abort's failure is not the question;
+        // whether MERGE_HEAD exists afterwards is.
         const aborted = await cleanupRepo(["merge", "--abort"]).then(
           () => true,
           () => false,
         );
+        const midMerge =
+          !aborted &&
+          (await cleanupRepo(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(
+            () => true,
+            () => false,
+          ));
         await unwind();
-        if (!aborted) {
+        if (midMerge) {
           return withStashNote(
             failed(
               t(
-                "{0} could not be merged into {1}, and the failed merge could not be aborted — {1} is left mid-merge; run `git merge --abort` in {2}.",
+                "{0} could not be merged into {1} ({3}), and the failed merge could not be aborted — {1} is left mid-merge; run `git merge --abort` in {2}.",
                 a.branch,
                 a.baseRef,
                 a.repoRoot,
+                describeGitError(err),
               ),
               conflicts,
             ),

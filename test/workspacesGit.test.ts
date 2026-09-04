@@ -145,17 +145,35 @@ test("uniquePath counts up until the path is free", () => {
 });
 
 test("withRepoLock serializes work on the same repository", async () => {
+  // Mutual exclusion is the contract; arrival order is not. `withRepoLock`
+  // awaits canonicalPath before it touches the lock map, so two callers racing
+  // into it can reach the map in either order — the sibling test below relies
+  // on that same window. Asserting a fixed sequence made this pass on macOS and
+  // fail on Linux CI, where the short body won the canonicalisation race and
+  // the order came back ["b", "a:start", "a:end"]. Nothing had interleaved.
   const order: string[] = [];
-  const slow = withRepoLock("/repos/omp", async () => {
-    order.push("a:start");
-    await new Promise((r) => setTimeout(r, 20));
-    order.push("a:end");
-  });
-  const fast = withRepoLock("/repos/omp", async () => {
-    order.push("b");
-  });
-  await Promise.all([slow, fast]);
-  assert.deepEqual(order, ["a:start", "a:end", "b"]);
+  const body = (tag: string, ms: number) => async () => {
+    order.push(tag + ":start");
+    if (ms) {
+      await new Promise((r) => setTimeout(r, ms));
+    }
+    order.push(tag + ":end");
+  };
+  await Promise.all([
+    withRepoLock("/repos/omp", body("a", 20)),
+    withRepoLock("/repos/omp", body("b", 0)),
+  ]);
+
+  assert.equal(order.length, 4, "both bodies ran to completion");
+  // The whole point: neither body observed the other running. Whoever went
+  // first has to finish before the other starts.
+  const first = order[0]?.split(":")[0];
+  const second = first === "a" ? "b" : "a";
+  assert.deepEqual(
+    order,
+    [`${first}:start`, `${first}:end`, `${second}:start`, `${second}:end`],
+    "one body ran to completion before the other began",
+  );
 });
 
 test("withRepoLock releases the lock when the body throws", async () => {
