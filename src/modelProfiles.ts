@@ -219,6 +219,29 @@ export const MODEL_PROFILES: readonly ModelProfile[] = [
     },
     badge: "Kimi",
   },
+
+  // ------------------------------------------------------------------- GPT
+  {
+    // `gpt[-.]?\d` so a future gpt-6 is covered without an edit; `codex`
+    // catches the codex-suffixed ids, which do not all carry a version.
+    family: "gpt",
+    match: { id: /(^|[^a-z])gpt[-.]?\d|codex/i },
+    contextFile: "AGENTS.md", // Codex reads AGENTS.md — the convention OpenAI authored
+    badge: "GPT",
+    note: "Every openai-codex model reports mode=effort; the ladder is [low..xhigh] on 5.3/5.4/5.5 and adds max on the 5.6 family, so no single literal fits and the level is left to omp. Codex CLI starts in a suggest tier that asks before writing, which is always-ask here.",
+    runtime: { thinking: "auto" },
+    spawn: {
+      approvalMode: "always-ask",
+      // A GPT session reading CLAUDE.md would be following another agent's
+      // instructions; omp ranks that provider above a bare AGENTS.md.
+      overlay: { disabledProviders: ["claude"] },
+    },
+  },
+  {
+    family: "gpt",
+    match: { id: /(^|[^a-z])gpt[-.]?\d|codex/i, provider: ["openai-codex", "openai"] },
+    badge: "GPT",
+  },
 ];
 
 /** Weight of a row against a model; 0 means no match. */

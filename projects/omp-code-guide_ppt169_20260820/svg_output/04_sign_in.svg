@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Golos Text, Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">УСТАНОВКА · ШАГ 3</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">Шаг 3 — войдите по подписке или добавьте ключ</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="signin-subscription" data-pptx-bounds="64 188 636 216">
+    <use data-icon="tabler-outline/user-check" x="64" y="192" width="24" height="24" fill="#6F5CE8" stroke-width="2"/>
+    <text x="100" y="214" font-size="26" font-weight="bold" fill="#2A2440">Подписка (OAuth)</text>
+    <text x="64" y="248" font-size="20" fill="#1D1B26">Агент работает на вашем действующем тарифе.</text>
+    <text x="64" y="274" font-size="20" fill="#1D1B26">Ключ не нужен, пополнять нечего.</text>
+    <text x="64" y="312" font-size="15" font-family="Consolas, Courier New, monospace" fill="#2A2440"><tspan x="64" dy="0">OMP Code: Sign in with Claude (Subscription)</tspan><tspan x="64" dy="24">OMP Code: Sign in with Kimi Code (Subscription)</tspan></text>
+    <text x="64" y="372" font-size="15" fill="#6B667E"><tspan x="64" dy="0">Откроется вкладка браузера. Если провайдер попросит код обратно,</tspan><tspan x="64" dy="22">панель покажет его с кнопкой копирования.</tspan></text>
+  </g>
+
+  <g id="signin-keys" data-pptx-bounds="64 418 656 246">
+    <line x1="64" y1="422" x2="700" y2="422" stroke="#DDD8EE" stroke-width="1"/>
+    <use data-icon="tabler-outline/key" x="64" y="440" width="24" height="24" fill="#6F5CE8" stroke-width="2"/>
+    <text x="100" y="462" font-size="26" font-weight="bold" fill="#2A2440">API-ключи</text>
+    <text x="64" y="496" font-size="20" fill="#1D1B26">Четыре провайдера, команда на каждый:</text>
+    <text x="64" y="530" font-size="15" font-family="Consolas, Courier New, monospace" fill="#2A2440"><tspan x="64" dy="0">OMP Code: Set Anthropic API Key</tspan><tspan x="64" dy="24">OMP Code: Set Kimi (Moonshot) API Key</tspan><tspan x="64" dy="24">OMP Code: Set GLM (Zhipu BigModel) API Key</tspan><tspan x="64" dy="24">OMP Code: Set Qwen (Alibaba Coding Plan) API Key</tspan></text>
+    <text x="64" y="626" font-size="15" fill="#6B667E"><tspan x="64" dy="0">Ключи живут в VS Code Secret Storage, не в settings.json, и передаются агенту</tspan><tspan x="64" dy="22">переменными окружения. Ключ, начавший отвечать 401, панель предложит удалить.</tspan></text>
+  </g>
+
+  <g id="stage-keys" data-pptx-bounds="760 172 456 492">
+    <rect x="760" y="176" width="456" height="484" fill="#16141F"/>
+    <image href="../images/keys.png" x="862" y="216" width="252" height="396" preserveAspectRatio="xMidYMid meet"/>
+    <text x="988" y="640" font-size="15" fill="#6B667E" text-anchor="middle">Карточка ключей: вход по подписке и четыре поля</text>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Установка</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">04</text>
+  </g>
+</svg>

@@ -2,9 +2,9 @@
   "name": "omp-code",
   "displayName": "OMP Code",
   "description": "%extension.description%",
-  "version": "0.6.0",
+  "version": "0.21.1",
   "publisher": "cryptotyan-star",
-  "author": "Ilona Pushilina",
+  "author": "BorisNers",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -36,7 +36,10 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onView:ompcode.chat"
+    "onView:ompcode.chat",
+    "onView:ompcode.board",
+    "onWebviewPanel:ompcode.chatTab",
+    "onWebviewPanel:ompcode.boardPanel"
   ],
   "contributes": {
     "viewsContainers": {
@@ -54,6 +57,19 @@
           "type": "webview",
           "id": "ompcode.chat",
           "name": "%view.chat.name%"
+        },
+        {
+          "type": "webview",
+          "id": "ompcode.board",
+          "name": "%view.board.name%"
+        },
+        {
+          "id": "ompcode.sessions",
+          "name": "%view.sessions.name%"
+        },
+        {
+          "id": "ompcode.review",
+          "name": "%view.review.name%"
         }
       ]
     },
@@ -65,6 +81,11 @@
           "light": "media/icon-light.svg",
           "dark": "media/icon-dark.svg"
         }
+      },
+      {
+        "command": "ompcode.openBoard",
+        "title": "%command.openBoard.title%",
+        "icon": "$(multiple-windows)"
       },
       {
         "command": "ompcode.showHistory",
@@ -88,8 +109,16 @@
         "title": "%command.setGlmKey.title%"
       },
       {
+        "command": "ompcode.setOpenAiKey",
+        "title": "%command.setOpenAiKey.title%"
+      },
+      {
         "command": "ompcode.setQwenKey",
         "title": "%command.setQwenKey.title%"
+      },
+      {
+        "command": "ompcode.setBigModelKey",
+        "title": "%command.setBigModelKey.title%"
       },
       {
         "command": "ompcode.loginClaude",
@@ -127,6 +156,132 @@
       {
         "command": "ompcode.exportTranscript",
         "title": "%command.exportTranscript.title%"
+      },
+      {
+        "command": "ompcode.sessionReveal",
+        "title": "%command.sessionReveal.title%",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ompcode.sessionAbort",
+        "title": "%command.sessionAbort.title%",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "ompcode.sessionClose",
+        "title": "%command.sessionClose.title%",
+        "icon": "$(close)"
+      },
+      {
+        "command": "ompcode.subagentTranscript",
+        "title": "%command.subagentTranscript.title%",
+        "icon": "$(output)"
+      },
+      {
+        "command": "ompcode.workspace.create",
+        "title": "%command.workspace.create.title%",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "ompcode.workspace.delete",
+        "title": "%command.workspace.delete.title%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "ompcode.workspace.reveal",
+        "title": "%command.workspace.reveal.title%",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ompcode.workspace.openTerminal",
+        "title": "%command.workspace.openTerminal.title%",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "ompcode.workspace.openInNewWindow",
+        "title": "%command.workspace.openInNewWindow.title%",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "ompcode.workspace.runSetup",
+        "title": "%command.workspace.runSetup.title%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ompcode.workspace.runConfigured",
+        "title": "%command.workspace.runConfigured.title%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ompcode.workspace.openPort",
+        "title": "%command.workspace.openPort.title%",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "ompcode.review.openFile",
+        "title": "%command.review.openFile.title%",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ompcode.review.openAll",
+        "title": "%command.review.openAll.title%",
+        "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "ompcode.review.discardFile",
+        "title": "%command.review.discardFile.title%",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "ompcode.review.merge",
+        "title": "%command.review.merge.title%",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "ompcode.review.refresh",
+        "title": "%command.review.refresh.title%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ompcode.review.deleteLosers",
+        "title": "%command.review.deleteLosers.title%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "ompcode.orchestrator.status",
+        "title": "%command.orchestrator.status.title%"
+      },
+      {
+        "command": "ompcode.installOrchestratorAgent",
+        "title": "%command.installOrchestratorAgent.title%"
+      },
+      {
+        "command": "ompcode.remoteStart",
+        "title": "%command.remoteStart.title%"
+      },
+      {
+        "command": "ompcode.remoteOpen",
+        "title": "%command.remoteOpen.title%"
+      },
+      {
+        "command": "ompcode.remoteCopyPairing",
+        "title": "%command.remoteCopyPairing.title%"
+      },
+      {
+        "command": "ompcode.remoteStartAllSessions",
+        "title": "%command.remoteStartAllSessions.title%"
+      },
+      {
+        "command": "ompcode.remoteRefreshPairing",
+        "title": "%command.remoteRefreshPairing.title%"
+      },
+      {
+        "command": "ompcode.remoteStatus",
+        "title": "%command.remoteStatus.title%"
+      },
+      {
+        "command": "ompcode.remoteStop",
+        "title": "%command.remoteStop.title%"
       }
     ],
     "menus": {
@@ -135,6 +290,26 @@
           "command": "ompcode.newSession",
           "when": "view == ompcode.chat",
           "group": "navigation"
+        },
+        {
+          "command": "ompcode.openBoard",
+          "when": "view == ompcode.board",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ompcode.workspace.create",
+          "when": "view == ompcode.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ompcode.review.openAll",
+          "when": "view == ompcode.review",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ompcode.review.refresh",
+          "when": "view == ompcode.review",
+          "group": "navigation@2"
         }
       ],
       "editor/title": [
@@ -148,6 +323,83 @@
           "command": "ompcode.addSelectionToChat",
           "when": "editorHasSelection",
           "group": "9_ompcode@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ompcode.sessionAbort",
+          "when": "view == ompcode.sessions && viewItem =~ /^(working|asks)(-closable)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ompcode.sessionClose",
+          "when": "view == ompcode.sessions && viewItem =~ /^(?!workspace-).+-closable$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "ompcode.subagentTranscript",
+          "when": "view == ompcode.sessions && viewItem =~ /^subagent-/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ompcode.workspace.reveal",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ompcode.workspace.openTerminal",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "inline@2"
+        },
+        {
+          "command": "ompcode.workspace.delete",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "inline@3"
+        },
+        {
+          "command": "ompcode.workspace.openInNewWindow",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "workspace@1"
+        },
+        {
+          "command": "ompcode.workspace.runSetup",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "workspace@2"
+        },
+        {
+          "command": "ompcode.workspace.openPort",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "inline@4"
+        },
+        {
+          "command": "ompcode.workspace.runConfigured",
+          "when": "view == ompcode.sessions && viewItem =~ /^workspace-/",
+          "group": "workspace@3"
+        },
+        {
+          "command": "ompcode.review.openFile",
+          "when": "view == ompcode.review && viewItem == review-file",
+          "group": "inline@1"
+        },
+        {
+          "command": "ompcode.review.discardFile",
+          "when": "view == ompcode.review && viewItem == review-file",
+          "group": "inline@2"
+        },
+        {
+          "command": "ompcode.review.merge",
+          "when": "view == ompcode.review && viewItem =~ /^review-workspace/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ompcode.review.openAll",
+          "when": "view == ompcode.review && viewItem =~ /^review-workspace/",
+          "group": "inline@2"
+        },
+        {
+          "command": "ompcode.review.deleteLosers",
+          "when": "view == ompcode.review && viewItem =~ /^review-workspace/",
+          "group": "review@1"
         }
       ]
     },
@@ -247,6 +499,21 @@
           ],
           "markdownDescription": "%config.approvalMode.markdownDescription%"
         },
+        "ompcode.subagentSubscription": {
+          "type": "string",
+          "enum": [
+            "off",
+            "progress",
+            "events"
+          ],
+          "enumDescriptions": [
+            "%config.subagentSubscription.off%",
+            "%config.subagentSubscription.progress%",
+            "%config.subagentSubscription.events%"
+          ],
+          "default": "progress",
+          "markdownDescription": "%config.subagentSubscription.markdownDescription%"
+        },
         "ompcode.theme": {
           "type": "string",
           "enum": [
@@ -275,6 +542,83 @@
           "type": "array",
           "default": [],
           "markdownDescription": "%config.modelProfiles.markdownDescription%"
+        },
+        "ompcode.remoteRelayUrl": {
+          "type": "string",
+          "default": "wss://my.omp.sh",
+          "markdownDescription": "%config.remoteRelayUrl.markdownDescription%"
+        },
+        "ompcode.worktreeBaseDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.worktreeBaseDir.markdownDescription%"
+        },
+        "ompcode.workspaceBranchPrefix": {
+          "type": "string",
+          "default": "omp/",
+          "markdownDescription": "%config.workspaceBranchPrefix.markdownDescription%"
+        },
+        "ompcode.workspaceSetup": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "ask",
+            "never"
+          ],
+          "enumDescriptions": [
+            "%config.workspaceSetup.enumDescriptions.0%",
+            "%config.workspaceSetup.enumDescriptions.1%",
+            "%config.workspaceSetup.enumDescriptions.2%"
+          ],
+          "default": "ask",
+          "markdownDescription": "%config.workspaceSetup.markdownDescription%"
+        },
+        "ompcode.portScan": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.portScan.markdownDescription%"
+        },
+        "ompcode.portScanIgnore": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [22, 80, 443],
+          "markdownDescription": "%config.portScanIgnore.markdownDescription%"
+        },
+        "ompcode.reviewAutoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.reviewAutoRefresh.markdownDescription%"
+        },
+        "ompcode.orchestratorTools": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.orchestratorTools.markdownDescription%"
+        },
+        "ompcode.askProcessesMode": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.askProcessesMode.markdownDescription%"
+        },
+        "ompcode.orchestratorMaxWorkspaces": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 20,
+          "markdownDescription": "%config.orchestratorMaxWorkspaces.markdownDescription%"
+        },
+        "ompcode.costLimitPerWorkspaceUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "%config.costLimitPerWorkspaceUsd.markdownDescription%"
+        },
+        "ompcode.costLimitPerSessionUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "%config.costLimitPerSessionUsd.markdownDescription%"
         }
       }
     }
@@ -289,11 +633,15 @@
     "dist": "npm run package && bash scripts/pack-dist.sh"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.21.3",
     "yaml": "^2.4.5"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
+    "@types/qrcode": "^1.5.6",
     "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.25.12",
     "typescript": "^5.4.5"

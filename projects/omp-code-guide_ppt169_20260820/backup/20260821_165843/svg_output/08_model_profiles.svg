@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">СПРАВОЧНИК · ПРОФИЛИ</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">Профили моделей: конвенции семейства</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="profile-intro" data-pptx-bounds="64 183 636 116">
+    <text x="64" y="204" font-size="20" fill="#1D1B26"><tspan x="64" dy="0">Claude Code читает CLAUDE.md и подтверждает</tspan><tspan x="64" dy="28">консервативно; Qwen Code читает QWEN.md и по умолчанию</tspan><tspan x="64" dy="28">на уровень свободнее. Вы выбираете модель — профиль</tspan><tspan x="64" dy="28">подтягивает конвенции её семейства.</tspan></text>
+  </g>
+
+  <g id="profile-notes" data-pptx-bounds="64 309 636 154">
+    <text x="64" y="326" font-size="15" fill="#6B667E"><tspan x="64" dy="0">Бейдж рядом с чипом модели называет семейство. Клик открывает</tspan><tspan x="64" dy="22">инспектор: каждое значение и его источник — встроенное или ваше.</tspan></text>
+    <text x="64" y="390" font-size="15" fill="#6B667E"><tspan x="64" dy="0">thinking и tool access правятся прямо в инспекторе — значение</tspan><tspan x="64" dy="22">пишется в ompcode.modelProfiles правилом для всего семейства.</tspan></text>
+    <text x="64" y="452" font-size="15" fill="#6B667E">Встроенные семейства: claude, glm, qwen, kimi, generic.</text>
+  </g>
+
+  <g id="profile-chip-warning" data-pptx-bounds="64 494 636 170">
+    <rect x="64" y="498" width="636" height="162" fill="#F4F3FA"/>
+    <rect x="64" y="498" width="3" height="162" fill="#6F5CE8"/>
+    <use data-icon="tabler-outline/adjustments" x="88" y="520" width="22" height="22" fill="#6F5CE8" stroke-width="2"/>
+    <text x="124" y="538" font-size="20" font-weight="bold" fill="#2A2440">Чип не равен профилю</text>
+    <text x="88" y="578" font-size="15" fill="#1D1B26"><tspan x="88" dy="0">Чипы think: и access: правят текущую сессию. Профиль — это</tspan><tspan x="88" dy="22">постоянное правило для всех моделей семейства, поэтому его</tspan><tspan x="88" dy="22">изменение перезапускает агента. Перезапуск тёплый: диалог переезжает.</tspan></text>
+  </g>
+
+  <g id="stage-profile" data-pptx-bounds="744 172 472 492">
+    <rect x="744" y="176" width="472" height="484" fill="#16141F"/>
+    <image href="../images/profile.png" x="768" y="216" width="200" height="314" preserveAspectRatio="xMidYMid meet"/>
+    <image href="../images/profile-thinking.png" x="992" y="216" width="200" height="314" preserveAspectRatio="xMidYMid meet"/>
+    <text x="868" y="566" font-size="15" fill="#6B667E" text-anchor="middle"><tspan x="868" dy="0">Инспектор профиля:</tspan><tspan x="868" dy="22">значение и его источник</tspan></text>
+    <text x="1092" y="566" font-size="15" fill="#6B667E" text-anchor="middle"><tspan x="1092" dy="0">Лестница мышления</tspan><tspan x="1092" dy="22">и сброс к встроенному</tspan></text>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Справочник</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">08</text>
+  </g>
+</svg>

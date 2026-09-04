@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Golos Text, Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">КАК ПОЛЬЗОВАТЬСЯ · ПАНЕЛЬ</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">Откройте чат и разберите панель на части</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="panel-open" data-pptx-bounds="64 182 636 56">
+    <rect x="64" y="186" width="636" height="48" fill="#F4F3FA"/>
+    <rect x="64" y="186" width="3" height="48" fill="#6F5CE8"/>
+    <text x="88" y="217" font-size="20" fill="#1D1B26">Иконка OMP Code в activity bar или Cmd/Ctrl+Alt+O</text>
+  </g>
+
+  <g id="panel-parts" data-pptx-bounds="64 258 636 240">
+    <circle cx="76" cy="276" r="13" fill="#6F5CE8"/>
+    <text x="76" y="282" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">1</text>
+    <text x="104" y="282" font-size="20" fill="#1D1B26">Блок рассуждения — сворачивается</text>
+    <circle cx="76" cy="342" r="13" fill="#6F5CE8"/>
+    <text x="76" y="348" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">2</text>
+    <text x="104" y="348" font-size="20" fill="#1D1B26">Карточка инструмента: аргументы, статус, diff</text>
+    <circle cx="76" cy="408" r="13" fill="#6F5CE8"/>
+    <text x="76" y="414" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">3</text>
+    <text x="104" y="414" font-size="20" fill="#1D1B26">Ответ — потоковый markdown с подсветкой</text>
+    <circle cx="76" cy="474" r="13" fill="#6F5CE8"/>
+    <text x="76" y="480" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">4</text>
+    <text x="104" y="480" font-size="20" fill="#1D1B26">Композер и подвал со счётчиком стоимости</text>
+  </g>
+
+  <g id="panel-input" data-pptx-bounds="64 524 636 122">
+    <line x1="64" y1="528" x2="700" y2="528" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="560" font-size="15" fill="#6B667E"><tspan x="64" dy="0">/ — slash-команды агента, @ — автодополнение файлов рабочей папки.</tspan><tspan x="64" dy="24">Вложения: кнопка скрепки, Ctrl/Cmd+V или Shift-перетаскивание.</tspan><tspan x="64" dy="24">Cmd/Ctrl+Alt+L отправляет выделение вместе с диапазоном строк.</tspan><tspan x="64" dy="24">Shift+Enter — перенос строки, Esc — прервать ход.</tspan></text>
+  </g>
+
+  <g id="stage-chat" data-pptx-bounds="744 172 472 492">
+    <rect x="744" y="176" width="472" height="484" fill="#16141F"/>
+    <image href="../images/chat.png" x="854" y="216" width="252" height="396" preserveAspectRatio="xMidYMid meet"/>
+    <circle cx="800" cy="268" r="13" fill="#6F5CE8"/>
+    <text x="800" y="274" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">1</text>
+    <line x1="817" y1="268" x2="850" y2="268" stroke="#6F5CE8" stroke-width="1"/>
+    <circle cx="800" cy="372" r="13" fill="#6F5CE8"/>
+    <text x="800" y="378" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">2</text>
+    <line x1="817" y1="372" x2="850" y2="372" stroke="#6F5CE8" stroke-width="1"/>
+    <circle cx="800" cy="476" r="13" fill="#6F5CE8"/>
+    <text x="800" y="482" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">3</text>
+    <line x1="817" y1="476" x2="850" y2="476" stroke="#6F5CE8" stroke-width="1"/>
+    <circle cx="800" cy="580" r="13" fill="#6F5CE8"/>
+    <text x="800" y="586" font-size="15" font-weight="bold" fill="#FFFFFF" text-anchor="middle">4</text>
+    <line x1="817" y1="580" x2="850" y2="580" stroke="#6F5CE8" stroke-width="1"/>
+    <text x="980" y="640" font-size="15" fill="#6B667E" text-anchor="middle">Панель: рассуждение, вызов инструмента, ответ, композер</text>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Как пользоваться</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">05</text>
+  </g>
+</svg>

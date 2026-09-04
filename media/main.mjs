@@ -4,13 +4,67 @@
   // every renderAssistant() call threw ReferenceError, which the host-message
   // try/catch swallowed — assistant replies silently never rendered.
   import { renderMarkdown } from "./markdown.mjs";
+  import { createHostPort } from "./host-port.mjs";
   // Interface language; see src/l10n.ts. The English source text is the key,
   // so an untranslated string renders as written instead of a placeholder.
   import { t } from "./l10n.mjs";
 
-  var vscode = acquireVsCodeApi();
+  var hostPort = createHostPort(window);
+  if (hostPort.kind === "android") document.body.setAttribute("data-platform", "android");
+  // A window reload throws this webview away; VS Code offers the panel back to
+  // the extension with nothing but the state stored here. The id names which
+  // chat this tab was (see src/chatTabs.ts) and is baked into the markup by
+  // getHtml, so it is stored now rather than waiting for a host message that a
+  // reload could beat. The sidebar view carries no id and is never restored.
+  var tabId = document.getElementById("app")?.getAttribute("data-tab-id");
+  // Read before writing: setState replaces the whole object, so anything else
+  // kept there — the processes column's collapsed preference — has to be
+  // carried across rather than overwritten by the id.
+  var storedState = null;
+  try { storedState = hostPort.getState(); } catch (e) { storedState = null; }
+  if (tabId) hostPort.setState(Object.assign({}, storedState || {}, { tabId: tabId }));
+  var remoteCapabilityVerbs = null;
+
+  var REMOTE_UI_CAPABILITY = {
+    ready: "view", getState: "view", getModels: "view", exportTranscript: "view",
+    diagnostics: "view",
+    prompt: "prompt", abort: "prompt", setModel: "prompt", setThinking: "prompt",
+    recheckModels: "prompt",
+    uiResponse: "approve",
+    pickFiles: "files", attachPaths: "files", attachData: "files",
+    cancelAttachment: "files", findFiles: "files", insertAtCursor: "files",
+    openDiff: "files", rejectEdit: "files",
+    compact: "session.manage", restart: "session.manage", newSession: "session.manage",
+    openNewTab: "session.manage", getHistory: "session.manage", openSession: "session.manage",
+    setApproval: "settings.manage", setProfileField: "settings.manage",
+    // Processes-column row actions. A phone never draws the column, but the
+    // verbs are mapped anyway: an unmapped verb is allowed by default, and
+    // deleting a worktree is not something a "view" pairing may do.
+    boardReveal: "view", boardStop: "prompt", boardDelete: "session.manage",
+    login: "credentials.manage", setKeys: "credentials.manage", clearKey: "credentials.manage",
+  };
+
+  function hasRemoteCapability(verb) {
+    return remoteCapabilityVerbs === null || remoteCapabilityVerbs.has(verb);
+  }
+
   function post(msg) {
-    try { vscode.postMessage(msg); } catch (e) { /* host gone */ }
+    if (remoteCapabilityVerbs !== null && msg && typeof msg.t === "string") {
+      if (msg.t === "attachPaths") {
+        toast(t("Desktop file paths cannot be attached from Android; use the attachment button."), 5000);
+        return false;
+      }
+      if (msg.t === "openProfileSettings") {
+        toast(t("Raw VS Code settings are available on the computer only."), 5000);
+        return false;
+      }
+      var required = REMOTE_UI_CAPABILITY[msg.t];
+      if (required && !remoteCapabilityVerbs.has(required)) {
+        toast(t("This action is not allowed by the Remote Control permissions selected on the computer."), 5000);
+        return false;
+      }
+    }
+    try { hostPort.post(msg); return true; } catch (e) { return false; }
   }
 
   /* Static skeleton lives in the host-provided HTML (ompSession.getHtml). */
@@ -19,6 +73,11 @@
   var welcomeEl = messagesEl.querySelector(".welcome");
   var workingEl = document.getElementById("working");
   var workingText = document.getElementById("working-text");
+  // Inside the working line on purpose: resetView() removes every child of
+  // #messages except this one, and omp's setStatus only rewrites #working-text.
+  var queueEl = document.createElement("span");
+  queueEl.className = "queue-count hidden";
+  workingEl.appendChild(queueEl);
   var modalHolder = document.getElementById("modal-holder");
   var menuHolder = document.getElementById("menu-holder");
   var toastHolder = document.getElementById("toast-holder");
@@ -43,6 +102,8 @@
   var sessionTitle = document.getElementById("session-title");
   var fileChip = document.getElementById("file-chip");
   var statsChip = document.getElementById("stats-chip");
+  var routeChip = document.getElementById("route-chip");
+  var connectionStateEl = document.getElementById("connection-state");
 
   /* ------------------------------------------------------------------ */
   /* State                                                               */
@@ -107,7 +168,15 @@
   var currentProfile = null;
   var working = false;
   var stuck = true;              // autoscroll stick-to-bottom
+  // One-shot routing: { provider, modelId, label } the next prompt goes
+  // through instead of the session model; cleared by the send that used it.
+  var routeChoice = null;
+  var remoteShellTitle = null;
   var pendingLocalUser = 0;      // user bubbles rendered locally, skip echoes
+  // Last send, kept only until the host confirms it: a rejected prompt must
+  // give the typing back instead of swallowing it.
+  var lastSentText = "";
+  var lastSentFiles = null;
   var retryNotice = null;
   var compactNotice = null;
   // Attachments staged for the next prompt: { path, name, size } once the host
@@ -129,6 +198,16 @@
   var promptHistory = [];
   var historyIdx = -1;      // -1 = editing, not browsing
   var historyDraft = "";
+
+  // Android full-sync packets stay below the origin-scoped WebMessage limit.
+  // A single transcript entry or state section can still be larger, so the
+  // native host forwards it as an ordered, hashed fragment stream. Keep the
+  // browser-side accumulator bounded as a second line of defence.
+  var MAX_SYNC_FRAGMENT_BYTES = 2 * 1024 * 1024;
+  var MAX_SYNC_FRAGMENT_COUNT = 32;
+  var MAX_ACTIVE_FRAGMENT_STREAMS = 4;
+  var syncFragments = new Map();
+  var syncApplyQueue = Promise.resolve();
 
   /* ------------------------------------------------------------------ */
   /* Small helpers                                                       */
@@ -179,6 +258,51 @@
     }, ms || 4000);
   }
 
+  var remoteResultCard = null;
+
+  function closeRemoteResult() {
+    if (remoteResultCard) { remoteResultCard.remove(); remoteResultCard = null; }
+  }
+
+  function showRemoteTextResult(titleText, bodyText) {
+    closeRemoteResult();
+    var card = document.createElement("div");
+    card.className = "ui-modal remote-result-card";
+    var title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = String(titleText || "OMP Code");
+    card.appendChild(title);
+    var body = document.createElement("pre");
+    body.className = "remote-result-body";
+    body.textContent = String(bodyText == null ? "" : bodyText);
+    card.appendChild(body);
+    var buttons = document.createElement("div");
+    buttons.className = "modal-buttons";
+    buttons.appendChild(modalButton(t("Close"), true, closeRemoteResult));
+    card.appendChild(buttons);
+    modalHolder.appendChild(card);
+    remoteResultCard = card;
+  }
+
+  function applyRemoteCapabilities(message) {
+    var verbs = Array.isArray(message.verbs)
+      ? message.verbs.filter(function (verb) { return typeof verb === "string"; })
+      : [];
+    remoteCapabilityVerbs = new Set(verbs);
+    document.body.setAttribute("data-remote-mode", "true");
+    [
+      [btnHistory, "session.manage"],
+      [btnNew, "session.manage"],
+      [btnRestart, "session.manage"],
+      [approvalChip, "settings.manage"],
+      [btnAttach, "files"],
+    ].forEach(function (entry) {
+      if (!entry[0]) return;
+      entry[0].classList.toggle("remote-capability-hidden", !hasRemoteCapability(entry[1]));
+    });
+    if (openMenuEl) closeMenu();
+  }
+
   /** Extract plain text from a message `content` field (string or block array). */
   function contentText(content) {
     if (content == null) return "";
@@ -202,13 +326,14 @@
   /* ------------------------------------------------------------------ */
   /* Messages: user / assistant                                          */
   /* ------------------------------------------------------------------ */
-  function addUserBubble(text, files) {
+  function addUserBubble(text, files, opts) {
+    var steer = !!(opts && opts.steer);
     var list = Array.isArray(files) ? files : [];
     if (!text && list.length === 0) return;
     var msg = document.createElement("div");
-    msg.className = "msg user";
+    msg.className = steer ? "msg user steer" : "msg user";
     var bubble = document.createElement("div");
-    bubble.className = "bubble";
+    bubble.className = steer ? "bubble steer" : "bubble";
     bubble.style.whiteSpace = "pre-wrap";
     bubble.textContent = String(text || "");
     if (list.length) {
@@ -225,6 +350,12 @@
         echo.appendChild(item);
       });
       bubble.appendChild(echo);
+    }
+    if (steer) {
+      var badge = document.createElement("span");
+      badge.className = "steer-badge";
+      badge.textContent = t("\u21b3 steer");
+      bubble.appendChild(badge);
     }
     msg.appendChild(bubble);
     appendToMessages(msg);
@@ -312,6 +443,10 @@
         tblock.className = "thinking" + (expanded[ti] ? "" : " collapsed");
         tblock.innerHTML = '<div class="thinking-head">✳ ' + esc(t("Thinking…")) +
           '</div><div class="thinking-body"></div>';
+        var thinkingHead = tblock.querySelector(".thinking-head");
+        thinkingHead.setAttribute("role", "button");
+        thinkingHead.setAttribute("tabindex", "0");
+        thinkingHead.setAttribute("aria-expanded", expanded[ti] ? "true" : "false");
         tblock.querySelector(".thinking-body").innerHTML = renderMarkdown(ttext);
         root.appendChild(tblock);
         ti++;
@@ -325,6 +460,10 @@
 
   function onMessageStart(m) {
     if (!m) return;
+    // The agent is producing messages, so the last send was accepted: drop the
+    // draft copy before a later failure can restore something stale.
+    lastSentText = "";
+    lastSentFiles = null;
     if (m.role === "user") {
       if (pendingLocalUser > 0) { pendingLocalUser--; return; }
       if (m.synthetic) return;
@@ -390,7 +529,7 @@
       card.dataset.status = "running";
       card.dataset.id = key || ("anon-" + (anonToolSeq++));
       card.innerHTML =
-        '<div class="tool-head">' +
+        '<div class="tool-head" role="button" tabindex="0" aria-expanded="false">' +
           '<span class="tool-dot"></span>' +
           '<span class="tool-name"></span>' +
           '<span class="tool-summary"></span>' +
@@ -449,6 +588,8 @@
     body.classList.remove("hidden");
     var nowCollapsed = body.classList.toggle("collapsed");
     if (toggle) toggle.textContent = nowCollapsed ? "▸" : "▾";
+    var head = card.querySelector(".tool-head");
+    if (head) head.setAttribute("aria-expanded", nowCollapsed ? "false" : "true");
     updateToolMore(card);
   }
 
@@ -470,6 +611,557 @@
     setToolBody(card, contentText(m.content));
     if (m.isError) card.dataset.status = "error";
     else if (card.dataset.status === "running") card.dataset.status = "ok";
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Subagents                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /* omp spawns subagents through a parent tool-call and then reports them on
+     two channels: rare `subagent_lifecycle` frames, forwarded as they happen,
+     and a `t:"subagents"` snapshot the host coalesces to at most 4 Hz because
+     a single subagent emits dozens of progress frames a second. Both land in
+     the same rows, so a start is visible immediately and the numbers catch up
+     on the next snapshot. */
+
+  var subagentRows = new Map();   // subagent id → row element
+  var subagentOrphansEl = null;   // holds rows whose parent tool-call is unknown
+
+  var SUBAGENT_STATUSES = { started: 1, completed: 1, failed: 1, aborted: 1 };
+
+  /** Present-and-usable test: an absent field must leave the rendered value alone. */
+  function subagentHas(v) {
+    return v !== undefined && v !== null && v !== "";
+  }
+
+  /** Rows live at the end of the transcript only while no parent card exists. */
+  function subagentOrphans() {
+    if (!subagentOrphansEl || !subagentOrphansEl.isConnected) {
+      subagentOrphansEl = document.createElement("div");
+      subagentOrphansEl.className = "subagent-list subagent-orphans";
+      appendToMessages(subagentOrphansEl);
+    }
+    return subagentOrphansEl;
+  }
+
+  /**
+   * Move `row` under its parent tool-call card, creating that card's list on
+   * first use. A row already placed is never demoted back to the orphan bin:
+   * a lifecycle frame can arrive before the tool-call card exists, and a later
+   * frame that simply omits parentToolCallId must not undo the reunion.
+   */
+  function placeSubagentRow(row, parentToolCallId) {
+    var card = subagentHas(parentToolCallId) ? byToolCallId.get(String(parentToolCallId)) : null;
+    if (card) {
+      var list = card.querySelector(".subagent-list");
+      if (!list) {
+        list = document.createElement("div");
+        list.className = "subagent-list";
+        card.appendChild(list);
+      }
+      if (row.parentNode !== list) list.appendChild(row);
+      return;
+    }
+    if (!row.parentNode) subagentOrphans().appendChild(row);
+  }
+
+  function ensureSubagentRow(id) {
+    var row = subagentRows.get(id);
+    if (row && row.isConnected) return row;
+    row = document.createElement("div");
+    row.className = "subagent-row";
+    row.setAttribute("data-sub-id", id);
+    row.setAttribute("data-status", "started");
+    // Static skeleton only. Every agent-controlled value below is written with
+    // textContent or via esc(), so nothing untrusted reaches innerHTML.
+    row.innerHTML =
+      '<span class="subagent-dot"></span>' +
+      '<span class="subagent-name"></span>' +
+      '<span class="subagent-badge subagent-model hidden"></span>' +
+      '<span class="subagent-badge subagent-auto" title="' +
+        esc(t("omp always runs subagents without approval prompts, whatever the session approval mode is.")) +
+        '">' + esc(t("auto-approved")) + '</span>' +
+      '<span class="subagent-tool"></span>' +
+      '<span class="subagent-cost"></span>' +
+      '<span class="subagent-tokens"></span>';
+    subagentRows.set(id, row);
+    return row;
+  }
+
+  /** Write one field, hiding its element while there is nothing to say. */
+  function setSubagentField(row, selector, text) {
+    var el = row.querySelector(selector);
+    if (!el) return;
+    text = String(text == null ? "" : text);
+    el.textContent = text;
+    if (text) el.classList.remove("hidden");
+    else el.classList.add("hidden");
+  }
+
+  /**
+   * Patch one row in place from a full or partial SubagentInfo. Rebuilding the
+   * row instead would restart the running dot's pulse animation several times
+   * a second, which reads as flicker rather than as progress.
+   */
+  function updateSubagentRow(info) {
+    if (!info || typeof info !== "object") return;
+    var id = subagentHas(info.id) ? String(info.id) : "";
+    if (!id) return;
+
+    var row = ensureSubagentRow(id);
+    placeSubagentRow(row, info.parentToolCallId);
+
+    var status = String(info.status);
+    if (Object.prototype.hasOwnProperty.call(SUBAGENT_STATUSES, status)) {
+      row.setAttribute("data-status", status);
+    }
+
+    if (subagentHas(info.description) || subagentHas(info.agent)) {
+      setSubagentField(row, ".subagent-name",
+        String(subagentHas(info.description) ? info.description : info.agent));
+    }
+    // The spawn task is long enough to swamp the row, so it lives in the
+    // tooltip where it stays one hover away.
+    if (subagentHas(info.task)) {
+      var nameEl = row.querySelector(".subagent-name");
+      if (nameEl) nameEl.title = String(info.task);
+    }
+    // A subagent can resolve to a different provider than the session, so the
+    // model is not decoration — it is the only place that difference shows.
+    if (subagentHas(info.resolvedModel)) setSubagentField(row, ".subagent-model", info.resolvedModel);
+    if (info.currentTool !== undefined) setSubagentField(row, ".subagent-tool", info.currentTool);
+    if (typeof info.cost === "number" && isFinite(info.cost)) {
+      setSubagentField(row, ".subagent-cost",
+        info.cost > 0 ? "$" + (info.cost < 0.01 ? info.cost.toFixed(4) : info.cost.toFixed(2)) : "");
+    }
+    if (typeof info.tokens === "number" && isFinite(info.tokens)) {
+      setSubagentField(row, ".subagent-tokens", info.tokens > 0 ? compactNum(info.tokens) : "");
+    }
+  }
+
+  /** Coalesced host snapshot — the only source of cost, tokens and currentTool. */
+  function renderSubagents(snapshot) {
+    var list = snapshot && Array.isArray(snapshot.subagents) ? snapshot.subagents : [];
+    for (var i = 0; i < list.length; i++) updateSubagentRow(list[i]);
+    if (list.length) scrollBottom();
+  }
+
+  /** Lifecycle frame — shown at once so a spawn is not up to 250 ms late. */
+  function onSubagentLifecycle(payload) {
+    if (!payload || typeof payload !== "object") return;
+    updateSubagentRow({
+      id: payload.id,
+      agent: payload.agent,
+      description: payload.description,
+      status: payload.status,
+      task: payload.task,
+      parentToolCallId: payload.parentToolCallId,
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Processes column                                                    */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * The orchestrator and its workspaces, listed down the left edge of a chat
+   * *tab*. Only a tab ever receives `{ t: "board" }`: the sidebar chat sits
+   * directly above the board view and would draw the same rows twice, and the
+   * Android shell has no orchestrator at all — so the column is built lazily,
+   * on the first board message, and the shared shell needs no markup for it.
+   *
+   * Classes are `pc-` prefixed rather than reusing board.css: that stylesheet
+   * defines `.chip`, `.composer` and `.msg`, which the chat already owns, so
+   * linking it here would repaint the composer.
+   */
+  var procsEl = null;
+  var procsListEl = null;
+  var procsSnapshot = null;
+  var procsSelfId = null;
+  var procsCollapsed = !!(storedState && storedState.procsCollapsed);
+  /** Column width in px. Dragged by .pc-grip, clamped by clampProcsWidth. */
+  var PC_WIDTH_DEFAULT = 232;
+  var PC_WIDTH_MIN = 168;
+  var PC_WIDTH_MAX = 520;
+  var procsWidth = clampProcsWidth(storedState && storedState.procsWidth);
+
+  /**
+   * Never wider than half the tab: a chat squeezed under its own composer is
+   * worse than a narrow list, and a stored width outlives the window size it
+   * was chosen at.
+   */
+  function clampProcsWidth(value) {
+    var n = Math.round(Number(value));
+    if (!Number.isFinite(n) || n <= 0) n = PC_WIDTH_DEFAULT;
+    var room = typeof window !== "undefined" && window.innerWidth
+      ? Math.round(window.innerWidth / 2)
+      : PC_WIDTH_MAX;
+    return Math.max(PC_WIDTH_MIN, Math.min(n, Math.max(PC_WIDTH_MIN, Math.min(PC_WIDTH_MAX, room))));
+  }
+
+  function pcBar(row) {
+    var bar = row && typeof row.bar === "string" ? row.bar : "idle";
+    switch (bar) {
+      case "running": case "done": case "error": case "waiting": case "budget": return bar;
+      default: return "idle";
+    }
+  }
+
+  function pcBarLabel(bar) {
+    switch (bar) {
+      case "running": return t("running");
+      case "done": return t("done");
+      case "error": return t("error");
+      case "waiting": return t("waiting");
+      case "budget": return t("budget");
+      default: return t("idle");
+    }
+  }
+
+  function pcStageName(stage) {
+    switch (stage) {
+      case "created": return t("stage created");
+      case "working": return t("stage working");
+      case "diffed": return t("stage diffed");
+      case "verified": return t("stage verified");
+      case "merged": return t("stage merged");
+      default: return "";
+    }
+  }
+
+  function pcUsd(usd) {
+    return "$" + (Number(usd) || 0).toFixed(2);
+  }
+
+  /** Limits read "$5", not "$5.00"; cents survive when they exist. */
+  function pcLimit(usd) {
+    var n = Number(usd) || 0;
+    return "$" + (Number.isInteger(n) ? n : n.toFixed(2));
+  }
+
+  function pcTime(sec) {
+    if (sec === undefined || sec === null) return "";
+    var s = Math.max(0, Math.round(Number(sec) || 0));
+    return t("{0}m {1}s", String(Math.floor(s / 60)), String(s % 60).padStart(2, "0"));
+  }
+
+  /** Second line of a row, without the cost — that carries its own colour. */
+  function pcSub(row) {
+    var parts = [pcBarLabel(pcBar(row))];
+    if (row.kind === "orchestrator") {
+      // The host's own count, so the column and the board never disagree about
+      // how much of the run has landed.
+      var counts = procsSnapshot && procsSnapshot.counts ? procsSnapshot.counts : {};
+      var kids = procsSnapshot && Array.isArray(procsSnapshot.rows)
+        ? procsSnapshot.rows.filter(function (r) { return r.kind === "workspace"; })
+        : [];
+      parts.push(t("{0} of {1} merged", String(counts.merged || 0), String(kids.length)));
+    } else {
+      var stage = pcStageName(row.stage);
+      parts.push(stage || (row.branch ? "⎇ " + row.branch : ""));
+    }
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  /** `$0.42`, or `$0.42 / $5` where the host set a per-workspace limit. */
+  function pcCost(row) {
+    return row.costLimitUsd !== undefined
+      ? pcUsd(row.costUsd) + " / " + pcLimit(row.costLimitUsd)
+      : pcUsd(row.costUsd);
+  }
+
+  function pcRowHtml(row) {
+    var bar = pcBar(row);
+    var child = row.kind === "workspace";
+    var self = child && procsSelfId && row.id === procsSelfId;
+    var progress = Math.max(0, Math.min(100, Math.round(Number(row.progress) || 0)));
+    var who = row.kind === "orchestrator"
+      ? ' <span class="pc-who">· ' + esc(t("orchestrator")) + "</span>"
+      : (self ? ' <span class="pc-who">· ' + esc(t("this tab")) + "</span>" : "");
+    var clock = pcTime(row.elapsedSec);
+    var title = row.lastError || row.lastText || "";
+    // Stop only while there is something live to stop; the tab's own workspace
+    // offers neither — closing your own chat from inside it is a trap.
+    var acts = child && !self
+      ? '<span class="pc-acts">'
+        + (bar === "running" || bar === "waiting"
+          ? '<button type="button" class="pc-act" data-pc-act="stop" title="' + esc(t("Stop")) + '" aria-label="' + esc(t("Stop")) + '">■</button>'
+          : "")
+        + '<button type="button" class="pc-act" data-pc-act="delete" title="' + esc(t("Delete")) + '" aria-label="' + esc(t("Delete")) + '">✕</button>'
+        + "</span>"
+      : "";
+    return '<div class="pc-row is-' + bar + (child ? " pc-child" : "") + (self ? " pc-self" : "")
+      + (row.needsHuman ? " pc-needs-human" : "")
+      + '" data-pc-id="' + esc(row.id) + '" data-pc-p="' + progress + '"'
+      + ' role="option" tabindex="0"' + (title ? ' title="' + esc(title) + '"' : "")
+      + ' aria-label="' + esc(row.name + ", " + pcBarLabel(bar)) + '">'
+      + '<span class="pc-stripe"><i></i></span>'
+      + '<span class="pc-dot"></span>'
+      + '<span class="pc-name">' + esc(row.name) + who + "</span>"
+      + '<span class="pc-sub"' + (row.model ? ' title="' + esc(row.model) + '"' : "") + ">"
+      + esc(pcSub(row))
+      + ' · <span class="pc-cost' + (row.overBudget ? " pc-spent" : "") + '">' + esc(pcCost(row)) + "</span>"
+      + "</span>"
+      + (clock ? '<span class="pc-clock">' + esc(clock) + "</span>" : "")
+      + acts
+      + "</div>";
+  }
+
+  /** Build the column and move the chat into a sibling stack beside it. */
+  function ensureProcsColumn() {
+    if (procsEl) return procsEl;
+    var app = document.getElementById("app");
+    var stack = app ? app.querySelector(".chat-stack") : null;
+    // Two gates, because neither is sufficient alone: the Android shell has no
+    // .chat-stack, and the sidebar chat has one but no tab id. The host already
+    // refuses to send a board message without a tab id; this is the same rule
+    // stated on the side that draws.
+    if (!tabId || !app || !stack) return null;
+    procsEl = document.createElement("aside");
+    procsEl.className = "pc";
+    procsEl.setAttribute("aria-label", t("Processes"));
+    procsEl.innerHTML =
+      '<div class="pc-head">'
+      // The name is on the element, not only in the span: both collapsed
+      // states hide that span, and the toggle is then the single control left
+      // in the rail — and the only way back out of it.
+      + '<button type="button" class="pc-toggle" aria-expanded="true"'
+      + ' aria-label="' + esc(t("Processes")) + '">'
+      + '<span class="pc-chev" aria-hidden="true">›</span>'
+      + "<span>" + esc(t("Processes")) + "</span>"
+      + "</button>"
+      + '<span class="pc-grow"></span>'
+      + '<span class="pc-count pc-all">0</span>'
+      + '<span class="pc-count pc-hot" hidden>0</span>'
+      + "</div>"
+      + '<div class="pc-list" role="listbox" aria-label="' + esc(t("Processes")) + '"></div>'
+      + '<div class="pc-foot"></div>'
+      // A separator, not a button: screen readers announce it as the boundary
+      // it is, and the arrow keys below are what the role already implies.
+      + '<div class="pc-grip" role="separator" aria-orientation="vertical" tabindex="0"'
+      + ' aria-label="' + esc(t("Resize the processes column")) + '"'
+      + ' title="' + esc(t("Drag to resize · double-click to reset")) + '"></div>';
+    procsListEl = procsEl.querySelector(".pc-list");
+    app.insertBefore(procsEl, stack);
+    app.classList.add("with-procs");
+    procsEl.addEventListener("click", onProcsClick);
+    procsEl.addEventListener("keydown", onProcsKeydown);
+    var grip = procsEl.querySelector(".pc-grip");
+    if (grip) {
+      grip.addEventListener("pointerdown", onGripDown);
+      grip.addEventListener("keydown", onGripKeydown);
+      grip.addEventListener("dblclick", function () { setProcsWidth(PC_WIDTH_DEFAULT); });
+    }
+    // A window that shrank below twice the stored width has to give the chat
+    // its room back; the clamp is re-applied rather than the width remembered.
+    window.addEventListener("resize", function () { applyProcsWidth(); });
+    applyProcsWidth();
+    applyProcsCollapsed();
+    return procsEl;
+  }
+
+  /* ------------------------------- width: drag, keyboard, persistence ----- */
+
+  function applyProcsWidth() {
+    if (!procsEl) return;
+    procsWidth = clampProcsWidth(procsWidth);
+    procsEl.style.setProperty("--pc-w", procsWidth + "px");
+    var grip = procsEl.querySelector(".pc-grip");
+    if (grip) {
+      grip.setAttribute("aria-valuenow", String(procsWidth));
+      grip.setAttribute("aria-valuemin", String(PC_WIDTH_MIN));
+      grip.setAttribute("aria-valuemax", String(PC_WIDTH_MAX));
+    }
+  }
+
+  /** Live during a drag; persisted once, on release. */
+  function setProcsWidth(next, persist) {
+    procsWidth = clampProcsWidth(next);
+    applyProcsWidth();
+    if (persist === false) return;
+    try {
+      var state = hostPort.getState();
+      hostPort.setState(Object.assign({}, state || {}, { procsWidth: procsWidth }));
+    } catch (e) { /* a port with no storage simply forgets the width */ }
+  }
+
+  function onGripDown(event) {
+    // A collapsed column has no width to drag; the toggle is the way back.
+    if (procsCollapsed || !procsEl) return;
+    event.preventDefault();
+    var startX = event.clientX;
+    var startWidth = procsWidth;
+    var app = document.getElementById("app");
+    if (app) app.classList.add("pc-resizing");
+    if (event.target.setPointerCapture) {
+      try { event.target.setPointerCapture(event.pointerId); } catch (e) { /* older webview */ }
+    }
+    var move = function (moveEvent) {
+      // Not persisted per frame: one write on release, not sixty a second.
+      setProcsWidth(startWidth + (moveEvent.clientX - startX), false);
+    };
+    var up = function () {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (app) app.classList.remove("pc-resizing");
+      setProcsWidth(procsWidth);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function onGripKeydown(event) {
+    var step = event.shiftKey ? 48 : 16;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setProcsWidth(procsWidth - step);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setProcsWidth(procsWidth + step);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setProcsWidth(PC_WIDTH_DEFAULT);
+    }
+  }
+
+  function applyProcsCollapsed() {
+    if (!procsEl) return;
+    procsEl.classList.toggle("pc-collapsed", procsCollapsed);
+    var toggle = procsEl.querySelector(".pc-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", procsCollapsed ? "false" : "true");
+  }
+
+  function setProcsCollapsed(next) {
+    procsCollapsed = !!next;
+    applyProcsCollapsed();
+    // Merged into the stored state rather than replacing it: the tab id lives
+    // there too, and it is the only thing a window reload hands back.
+    try {
+      var state = hostPort.getState();
+      hostPort.setState(Object.assign({}, state || {}, { procsCollapsed: procsCollapsed }));
+    } catch (e) { /* a port with no storage simply forgets the preference */ }
+  }
+
+  /** Markup currently in .pc-list, so an unchanged push costs nothing. */
+  var procsListHtml = "";
+
+  /**
+   * Replace the list and put back what the rewrite would otherwise throw away:
+   * where the reader had scrolled to, and which row — or which of that row's
+   * actions — held the keyboard.
+   */
+  function redrawProcsList(html) {
+    var scroll = procsListEl.scrollTop;
+    var active = document.activeElement;
+    var keptId = active && active.closest ? procsRowId(active) : null;
+    var keptAct = active && active.dataset ? active.dataset.pcAct : undefined;
+
+    procsListEl.innerHTML = html;
+    procsListHtml = html;
+
+    // CSP forbids inline style attributes; the stripe width goes through the
+    // CSSOM, exactly as the board renderer does it.
+    var painted = procsListEl.querySelectorAll(".pc-row");
+    for (var i = 0; i < painted.length; i++) {
+      painted[i].style.setProperty("--pc-p", painted[i].dataset.pcP + "%");
+    }
+
+    procsListEl.scrollTop = scroll;
+    if (!keptId) return;
+    var row = procsListEl.querySelector('[data-pc-id="' + keptId.replace(/"/g, '\\"') + '"]');
+    if (!row) return;
+    // A focused action button comes back as that same action, not as the row:
+    // landing on the row would move Tab order under the reader's fingers.
+    var target = keptAct ? row.querySelector('[data-pc-act="' + keptAct + '"]') : row;
+    if (target && target.focus) target.focus();
+  }
+
+  function renderProcs(snapshot, selfId) {
+    procsSnapshot = snapshot && Array.isArray(snapshot.rows) ? snapshot : { rows: [] };
+    procsSelfId = typeof selfId === "string" && selfId ? selfId : null;
+    var column = ensureProcsColumn();
+    if (!column || !procsListEl) return;
+    var rows = procsSnapshot.rows;
+    var kids = rows.filter(function (r) { return r.kind === "workspace"; });
+    var lead = rows.filter(function (r) { return r.kind === "orchestrator"; });
+    // The orchestrator is not one of the processes the empty state is about:
+    // keying both on `rows.length` left an unexplained blank list whenever the
+    // orchestrator was running and no workspace had been cut yet.
+    var html = lead.map(pcRowHtml).join("")
+      + (kids.length
+        ? kids.map(pcRowHtml).join("")
+        : '<div class="pc-empty"><div>' + esc(t("No processes yet")) + "</div><div class=\"pc-empty-sub\">"
+          + esc(t("Workspaces the orchestrator starts will appear here.")) + "</div></div>");
+    // The host pushes on a 2 s timer whether or not anything moved, and every
+    // row is focusable and hoverable. Rewriting identical markup would drop
+    // keyboard focus, reset the scroll, cancel a hovered tooltip and — when a
+    // repaint lands between mousedown and mouseup — swallow the click on a
+    // row's ■ or ✕ outright. On an idle board this skips the write entirely.
+    if (html !== procsListHtml) {
+      redrawProcsList(html);
+    }
+    var counts = procsSnapshot.counts || {};
+    var needs = (counts.error || 0) + (counts.waiting || 0);
+    var all = procsEl.querySelector(".pc-all");
+    if (all) all.textContent = String(kids.length);
+    var hot = procsEl.querySelector(".pc-hot");
+    if (hot) {
+      hot.hidden = needs === 0;
+      hot.textContent = String(needs);
+    }
+    var foot = procsEl.querySelector(".pc-foot");
+    if (foot) {
+      var total = pcUsd(procsSnapshot.totalCostUsd);
+      foot.textContent = procsSnapshot.sessionLimitUsd !== undefined
+        ? t("Total {0} (limit {1})", total, pcLimit(procsSnapshot.sessionLimitUsd))
+        : t("Total {0}", total);
+      foot.classList.toggle("pc-over", procsSnapshot.overSessionBudget === true);
+    }
+  }
+
+  function procsRowId(target) {
+    var node = target;
+    while (node && node !== procsEl) {
+      if (node.dataset && node.dataset.pcId) return node.dataset.pcId;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function onProcsClick(event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest(".pc-toggle")) {
+      setProcsCollapsed(!procsCollapsed);
+      return;
+    }
+    var act = target.closest("[data-pc-act]");
+    var id = procsRowId(target);
+    if (!id) return;
+    if (act) {
+      event.preventDefault();
+      event.stopPropagation();
+      post({ t: act.dataset.pcAct === "stop" ? "boardStop" : "boardDelete", id: id });
+      return;
+    }
+    // The row for this very tab is listed and focusable, but it is not a
+    // destination — revealing it would raise the chat the reader is inside.
+    if (procsSelfId && id === procsSelfId) return;
+    post({ t: "boardReveal", id: id });
+  }
+
+  function onProcsKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    // A focused stop or delete button handles its own keys; without this the
+    // same press both pressed the button and revealed the row behind it.
+    if (event.target && event.target.closest && event.target.closest("[data-pc-act]")) return;
+    var id = procsRowId(event.target);
+    if (!id) return;
+    if (procsSelfId && id === procsSelfId) return;
+    event.preventDefault();
+    post({ t: "boardReveal", id: id });
   }
 
   /* ------------------------------------------------------------------ */
@@ -582,7 +1274,7 @@
         // "session too small"), and the fill will not drop, so without this
         // the warning and its button would be gone for good.
         contextStepsFired[step] = false;
-        post({ t: "compact" });
+        if (post({ t: "compact" }) === false) return;
         toast(t("Compacting context…"), 3000);
       },
     );
@@ -629,7 +1321,12 @@
   function setWorking(on) {
     working = !!on;
     workingEl.classList.toggle("hidden", !working);
-    btnSend.classList.toggle("hidden", working);
+    // Send stays reachable during a turn — it switches to steer instead of
+    // hiding, which is the only way to steer on Android (Enter is a newline).
+    btnSend.classList.toggle("steer", working);
+    btnSend.textContent = working ? "\u21ea" : "\u2191";
+    btnSend.title = working ? t("Steer (send while running)") : t("Send");
+    btnSend.setAttribute("aria-label", working ? t("Steer (send while running)") : t("Send"));
     btnStop.classList.toggle("hidden", !working);
     if (!working) workingText.textContent = t("Working…");
     if (working) { hideWelcome(); scrollBottom(); }
@@ -682,12 +1379,7 @@
       case "cancel": {
         var target = f.targetId != null ? f.targetId : (f.requestId != null ? f.requestId : f.cancelId);
         if (target == null) return;
-        modalQueue = modalQueue.filter(function (q) { return q.id !== target; });
-        if (activeModal && activeModal.frame && activeModal.frame.id === target) {
-          activeModal.el.remove();
-          activeModal = null;
-          pumpModals();
-        }
+        dropApprovalModal(target);
         return; // no response for cancel
       }
       case "setWidget":
@@ -697,16 +1389,47 @@
     }
   }
 
+  function dropApprovalModal(requestId) {
+    requestId = String(requestId == null ? "" : requestId);
+    if (!requestId) return;
+    modalQueue = modalQueue.filter(function (q) { return String(q.id) !== requestId; });
+    if (activeModal && activeModal.frame && String(activeModal.frame.id) === requestId) {
+      var previousFocus = activeModal.previousFocus;
+      activeModal.el.remove();
+      activeModal = null;
+      settleModalClose(previousFocus);
+    }
+  }
+
   function pumpModals() {
     if (activeModal || !modalQueue.length) return;
+    // The settings screen sits above the modal layer. An approval that arrives
+    // behind it would be invisible and would block the agent until it was found.
+    closeSettings();
     showModal(modalQueue.shift());
+  }
+
+  function notifyAndroidModalState(open) {
+    if (hostPort.kind !== "android") return;
+    try { hostPort.post({ t: "androidModalState", open: !!open }); } catch (e) { /* native shell may be detaching */ }
+  }
+
+  function settleModalClose(previousFocus) {
+    pumpModals();
+    if (activeModal) return;
+    modalHolder.classList.remove("active");
+    notifyAndroidModalState(false);
+    if (previousFocus && previousFocus.isConnected && typeof previousFocus.focus === "function") {
+      setTimeout(function () { previousFocus.focus(); }, 0);
+    }
   }
 
   function closeActiveModal() {
     if (!activeModal) return;
+    var previousFocus = activeModal.previousFocus;
     activeModal.el.remove();
     activeModal = null;
-    pumpModals();
+    settleModalClose(previousFocus);
   }
 
   function cancelActiveModal() {
@@ -727,6 +1450,9 @@
   function showModal(frame) {
     var el = document.createElement("div");
     el.className = "ui-modal";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.setAttribute("tabindex", "-1");
     var method = frame.method;
     var id = frame.id;
 
@@ -737,8 +1463,10 @@
       : t("Input");
     var title = document.createElement("div");
     title.className = "modal-title";
+    title.id = "active-modal-title";
     title.textContent = titleText;
     el.appendChild(title);
+    el.setAttribute("aria-labelledby", title.id);
 
     var msgText = frame.message != null ? frame.message
       : (frame.prompt != null ? frame.prompt : "");
@@ -817,7 +1545,15 @@
     }
 
     modalHolder.appendChild(el);
-    activeModal = { frame: frame, el: el };
+    activeModal = { frame: frame, el: el, previousFocus: document.activeElement };
+    modalHolder.classList.add("active");
+    notifyAndroidModalState(true);
+    if (method === "confirm" || method === "select") {
+      setTimeout(function () {
+        var focusTarget = el.querySelector("button, textarea, input, [tabindex]:not([tabindex='-1'])");
+        (focusTarget || el).focus();
+      }, 0);
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -853,7 +1589,7 @@
       var row = document.createElement("div");
       row.className = "modal-buttons setup-signin";
       row.appendChild(modalButton(label, true, function () {
-        post({ t: "login", providerId: providerId });
+        if (post({ t: "login", providerId: providerId }) === false) return;
         toast(t("Opening browser for sign-in…"), 5000);
         closeSetupCard();
       }));
@@ -884,7 +1620,12 @@
 
     var inputs = [];
     keyedProviders.forEach(function (p) {
-      var inp = field(t("{0} API key ({1})", p.label, p.envVar), p.placeholder, keyStatus[p.id]);
+      // No env var means the key is written into models.yml instead; naming a
+      // variable that nothing reads would send people editing their shell.
+      var labelText = p.envVar
+        ? t("{0} API key ({1})", p.label, p.envVar)
+        : t("{0} API key", p.label);
+      var inp = field(labelText, p.placeholder, keyStatus[p.id]);
       inputs.push({ id: p.id, inp: inp });
     });
 
@@ -1076,6 +1817,190 @@
     scrollBottom();
   }
 
+  function syncFragmentKey(kind, m) {
+    if (kind === "result") {
+      var streamId = typeof m.streamId === "string" ? m.streamId : "";
+      var commandId = typeof m.commandId === "string" ? m.commandId : "";
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(streamId) ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(commandId)) {
+        throw new Error("fragmented command result identity is invalid");
+      }
+      return kind + ":" + streamId + ":" + commandId.toLowerCase();
+    }
+    var syncId = typeof m.syncId === "string" ? m.syncId : "";
+    var sessionId = typeof m.sessionId === "string" ? m.sessionId : "";
+    if (!syncId || !sessionId) throw new Error("fragmented sync identity is missing");
+    if (kind === "transcript") {
+      if (!Number.isSafeInteger(m.messageIndex) || m.messageIndex < 0) {
+        throw new Error("transcript fragment message index is invalid");
+      }
+      return kind + ":" + syncId + ":" + sessionId + ":" + m.messageIndex;
+    }
+    var section = typeof m.section === "string" ? m.section : "";
+    if (!section) throw new Error("sync section name is missing");
+    return kind + ":" + syncId + ":" + sessionId + ":" + section;
+  }
+
+  function beginSyncFragment(kind, m) {
+    var key = syncFragmentKey(kind, m);
+    var count = m.fragmentCount;
+    var total = m.totalBytes;
+    var digest = typeof m.sha256 === "string" ? m.sha256.toLowerCase() : "";
+    if (!Number.isSafeInteger(count) || count < 1 || count > MAX_SYNC_FRAGMENT_COUNT) {
+      throw new Error("fragmented sync count is invalid");
+    }
+    if (!Number.isSafeInteger(total) || total < 1 || total > MAX_SYNC_FRAGMENT_BYTES) {
+      throw new Error("fragmented sync size is invalid");
+    }
+    if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("fragmented sync digest is invalid");
+    if (syncFragments.has(key)) throw new Error("fragmented sync already exists");
+    if (syncFragments.size >= MAX_ACTIVE_FRAGMENT_STREAMS) throw new Error("too many fragmented streams");
+    var uiKind = null;
+    var uiToken = null;
+    if (kind === "result") {
+      uiKind = typeof m.uiKind === "string" ? m.uiKind : "";
+      if (["history", "files", "diagnostics", "models-probe", "diff"].indexOf(uiKind) < 0) {
+        throw new Error("fragmented command result kind is invalid");
+      }
+      if (m.uiToken != null) {
+        if (typeof m.uiToken !== "string" || !m.uiToken.length || m.uiToken.length > 128) {
+          throw new Error("fragmented command result token is invalid");
+        }
+        uiToken = m.uiToken;
+      }
+      if ((uiKind === "files") !== !!uiToken) {
+        throw new Error("fragmented file result token is missing or unexpected");
+      }
+    }
+    syncFragments.set(key, {
+      kind: kind,
+      section: m.section,
+      uiKind: uiKind,
+      uiToken: uiToken,
+      count: count,
+      total: total,
+      digest: digest,
+      next: 0,
+      received: 0,
+      chunks: [],
+    });
+  }
+
+  function decodeSyncChunk(data) {
+    if (typeof data !== "string" || !data.length || data.length > 256 * 1024 ||
+        data.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+      throw new Error("fragmented sync chunk is not canonical base64");
+    }
+    var binary = atob(data);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function appendSyncFragment(kind, m) {
+    var key = syncFragmentKey(kind, m);
+    var state = syncFragments.get(key);
+    if (!state) throw new Error("fragmented sync was not started");
+    if (!Number.isSafeInteger(m.fragmentIndex) || m.fragmentIndex !== state.next) {
+      syncFragments.delete(key);
+      throw new Error("fragmented sync arrived out of order");
+    }
+    var bytes = decodeSyncChunk(m.data);
+    if (state.received + bytes.byteLength > state.total) {
+      syncFragments.delete(key);
+      throw new Error("fragmented sync exceeds its declared size");
+    }
+    state.chunks.push(bytes);
+    state.received += bytes.byteLength;
+    state.next++;
+  }
+
+  function bytesToHex(bytes) {
+    var out = "";
+    for (var i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
+    return out;
+  }
+
+  async function commitSyncFragment(kind, m) {
+    var key = syncFragmentKey(kind, m);
+    var state = syncFragments.get(key);
+    syncFragments.delete(key);
+    if (!state || state.next !== state.count || state.received !== state.total) {
+      throw new Error("fragmented sync is incomplete");
+    }
+    if (!window.crypto || !window.crypto.subtle) throw new Error("secure digest API is unavailable");
+    var bytes = new Uint8Array(state.total);
+    var offset = 0;
+    state.chunks.forEach(function (chunk) { bytes.set(chunk, offset); offset += chunk.byteLength; });
+    var digest = new Uint8Array(await window.crypto.subtle.digest("SHA-256", bytes));
+    if (bytesToHex(digest) !== state.digest) throw new Error("fragmented sync digest mismatch");
+    var value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (kind === "transcript") renderTranscript([value]);
+    else if (kind === "section") applyRemoteSyncSection(state.section, value);
+    else applyRemoteCommandResult(state.uiKind, state.uiToken, value);
+  }
+
+  function applyRemoteSyncSection(section, value) {
+    switch (section) {
+      case "state": applyState(value); break;
+      case "models": models = Array.isArray(value) ? value : []; break;
+      case "commands": commands = Array.isArray(value) ? value : []; break;
+      case "stats": handleHostMessage({ t: "sessionStats", stats: value }); break;
+      case "approvalMode": if (value) setApprovalChip(String(value)); break;
+      case "profile": setProfileChip(value); break;
+      case "configuration": handleHostMessage({ t: "boot", cfg: value }); break;
+      case "approvals":
+        if (Array.isArray(value)) value.forEach(function (frame) { handleFrame(frame); });
+        break;
+      default: throw new Error("unsupported fragmented sync section");
+    }
+  }
+
+  function applyRemoteCommandResult(uiKind, uiToken, value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("fragmented command result is not an object");
+    }
+    switch (uiKind) {
+      case "history":
+        handleHostMessage({ t: "history", sessions: Array.isArray(value.sessions) ? value.sessions : [] });
+        break;
+      case "files":
+        handleHostMessage({ t: "fileCandidates", token: uiToken, files: Array.isArray(value.files) ? value.files : [] });
+        break;
+      case "diagnostics":
+        if (typeof value.markdown !== "string") throw new Error("fragmented diagnostics result is invalid");
+        handleHostMessage({ t: "diagnosticsResult", markdown: value.markdown });
+        break;
+      case "models-probe":
+        if (!value.results || typeof value.results !== "object" || Array.isArray(value.results)) {
+          throw new Error("fragmented model probe result is invalid");
+        }
+        handleHostMessage({ t: "probe", results: value.results, running: false, enabled: true });
+        break;
+      case "diff":
+        if (typeof value.changeId !== "string" || typeof value.afterSha256 !== "string") {
+          throw new Error("fragmented diff result is invalid");
+        }
+        handleHostMessage({
+          t: "diffContent",
+          toolCallId: value.changeId,
+          path: value.path,
+          before: value.before,
+          current: value.current,
+          afterSha256: value.afterSha256,
+        });
+        break;
+      default:
+        throw new Error("unsupported fragmented command result");
+    }
+  }
+
+  function enqueueSyncApply(context, action) {
+    syncApplyQueue = syncApplyQueue.then(action).catch(function (err) {
+      reportUiError(err, context);
+    });
+  }
+
   /* ------------------------------------------------------------------ */
   /* Sign-in card (OAuth redirect + device-code flows)                   */
   /* ------------------------------------------------------------------ */
@@ -1232,10 +2157,23 @@
   function addMenuItem(menu, text, onClick) {
     var el = document.createElement("div");
     el.className = "menu-item";
+    el.setAttribute("role", "menuitem");
+    el.setAttribute("tabindex", "0");
     el.textContent = String(text);
     el.addEventListener("click", onClick);
+    el.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onClick();
+      }
+    });
     menu.appendChild(el);
     return el;
+  }
+
+  function addCapabilityMenuItem(menu, capability, text, onClick) {
+    if (!hasRemoteCapability(capability)) return null;
+    return addMenuItem(menu, text, onClick);
   }
 
   /**
@@ -1246,6 +2184,9 @@
   function addMenuChoice(menu, text, hint, current, onClick) {
     var el = document.createElement("div");
     el.className = "menu-item menu-choice" + (current ? " menu-choice-on" : "");
+    el.setAttribute("role", "menuitemradio");
+    el.setAttribute("aria-checked", current ? "true" : "false");
+    el.setAttribute("tabindex", "0");
     var head = document.createElement("div");
     head.className = "menu-choice-head";
     head.textContent = (current ? "✓ " : "") + String(text);
@@ -1257,6 +2198,12 @@
       el.appendChild(sub);
     }
     el.addEventListener("click", onClick);
+    el.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onClick();
+      }
+    });
     menu.appendChild(el);
     return el;
   }
@@ -1374,7 +2321,7 @@
    */
   function setProfileField(field, value) {
     if (!currentProfile || currentProfile.family == null) return;
-    post({ t: "setProfileField", family: String(currentProfile.family), field: field, value: value });
+    if (post({ t: "setProfileField", family: String(currentProfile.family), field: field, value: value }) === false) return;
     closeMenu();
     toast(value === null
       ? t("Cleared — back to the built-in value. Restarting agent…")
@@ -1384,6 +2331,10 @@
   function buildProfileThinkingMenu(menu) {
     var p = currentProfile;
     if (!p) return;
+    if (!hasRemoteCapability("settings.manage")) {
+      addMenuLabel(menu, t("This action is not allowed by the Remote Control permissions selected on the computer."));
+      return;
+    }
     var current = p.runtime && p.runtime.thinking != null ? String(p.runtime.thinking) : null;
     addMenuLabel(menu, t("thinking — {0}", p.family != null ? String(p.family) : t("generic")));
     var choice = thinkingChoicesFor(currentModel);
@@ -1402,6 +2353,10 @@
   function buildProfileAccessMenu(menu) {
     var p = currentProfile;
     if (!p) return;
+    if (!hasRemoteCapability("settings.manage")) {
+      addMenuLabel(menu, t("This action is not allowed by the Remote Control permissions selected on the computer."));
+      return;
+    }
     var current = p.spawn && p.spawn.approvalMode != null ? String(p.spawn.approvalMode) : null;
     addMenuLabel(menu, t("tool access — {0}", p.family != null ? String(p.family) : t("generic")));
     APPROVAL_MODES.forEach(function (m) {
@@ -1451,16 +2406,16 @@
     // Thinking and tool access always resolve to something — the base profile
     // sets both — so these two rows are always here to be clicked.
     addProfileRow(menu, "thinking", runtime.thinking, provenanceOf(p, "runtime.thinking"),
-      function () {
+      hasRemoteCapability("settings.manage") ? function () {
         closeMenu();
         openMenu(profileChip, buildProfileThinkingMenu);
-      });
+      } : null);
 
     var accessRow = addProfileRow(menu, t("tool access"), spawn.approvalMode,
-      provenanceOf(p, "spawn.approvalMode"), function () {
+      provenanceOf(p, "spawn.approvalMode"), hasRemoteCapability("settings.manage") ? function () {
         closeMenu();
         openMenu(profileChip, buildProfileAccessMenu);
-      });
+      } : null);
     // The raw id is what a settings row would carry, so that is what the
     // value shows; the plain-English reading goes on the tooltip.
     for (var i = 0; i < APPROVAL_MODES.length; i++) {
@@ -1482,11 +2437,13 @@
       });
     }
 
-    addMenuItem(menu, t("Edit ompcode.modelProfiles…"), function () {
-      closeMenu();
-      post({ t: "openProfileSettings" });
-    });
-    addMenuLabel(menu, t("the rest is edited in settings.json"));
+    if (remoteCapabilityVerbs === null) {
+      addMenuItem(menu, t("Edit ompcode.modelProfiles…"), function () {
+        closeMenu();
+        post({ t: "openProfileSettings" });
+      });
+      addMenuLabel(menu, t("the rest is edited in settings.json"));
+    }
   }
 
   /**
@@ -1521,6 +2478,7 @@
     closeMenu();
     var menu = document.createElement("div");
     menu.className = "menu";
+    menu.setAttribute("role", "menu");
     build(menu);
     menuHolder.appendChild(menu);
     menu.style.position = "fixed";
@@ -1610,12 +2568,19 @@
           label += "  ✕ " + (v.status != null ? v.status : "failed");
         }
         var item = addMenuItem(menu, label, function () {
-          post({ t: "setModel", provider: m.provider, modelId: m.id });
+          if (post({ t: "setModel", provider: m.provider, modelId: m.id }) === false) return;
           modelChip.textContent = m.name != null ? m.name : (m.id != null ? m.id : "model");
           closeMenu();
         });
         if (v && !v.ok) item.classList.add("menu-item-dead");
       });
+    });
+
+    addMenuLabel(menu, t("routing"));
+    addMenuItem(menu, t("Route the next prompt through a different model…"), function () {
+      armRouteChip();
+      closeMenu();
+      openMenu(routeChip, buildRouteMenu);
     });
 
     if (!probe.enabled) return;
@@ -1627,9 +2592,9 @@
         openMenu(modelChip, buildModelMenu);
       });
     }
-    addMenuItem(menu, probe.running ? t("Checking…") : t("Re-check subscriptions"), function () {
+    addCapabilityMenuItem(menu, "prompt", probe.running ? t("Checking…") : t("Re-check subscriptions"), function () {
       if (probe.running) return;
-      post({ t: "recheckModels" });
+      if (post({ t: "recheckModels" }) === false) return;
       toast(t("Checking which models answer…"), 4000);
       closeMenu();
     });
@@ -1639,7 +2604,6 @@
     if (!models.length) post({ t: "getModels" });
     openMenu(modelChip, buildModelMenu);
   });
-
   thinkingChip.addEventListener("click", function () {
     openMenu(thinkingChip, function (menu) {
       var choice = thinkingChoicesFor(currentModel);
@@ -1658,7 +2622,7 @@
       }
       choice.levels.forEach(function (level) {
         addMenuChoice(menu, level, THINKING_HINTS[level], level === thinkingChoice, function () {
-          post({ t: "setThinking", level: level });
+          if (post({ t: "setThinking", level: level }) === false) return;
           thinkingChoice = level;
           currentThinking = level;
           thinkingChip.textContent = t("think: {0}", level);
@@ -1678,13 +2642,75 @@
           addMenuChoice(menu, m.label, m.hint, m.id === currentApproval, function () {
             closeMenu();
             if (m.id === currentApproval) return;
-            post({ t: "setApproval", mode: m.id });
+            if (post({ t: "setApproval", mode: m.id }) === false) return;
             setApprovalChip(m.id);
             toast(t("Tool access: {0} — restarting agent", m.label), 4000);
           });
         });
         addMenuLabel(menu, t("changing this restarts the agent"));
       });
+    });
+  }
+
+  // One-shot routing chip: pick a model for the next prompt only. Hidden
+  // until armed from the model menu; sending consumes and hides it again.
+  function setRoute(choice) {
+    routeChoice = choice;
+    if (!routeChip) return;
+    if (choice) {
+      routeChip.textContent = t("route: {0}", choice.label);
+    } else {
+      routeChip.textContent = t("route: …");
+    }
+  }
+
+  function armRouteChip() {
+    if (!routeChip) return;
+    routeChip.classList.remove("hidden");
+    if (!routeChoice) routeChip.textContent = t("route: …");
+  }
+
+  function buildRouteMenu(menu) {
+    addMenuLabel(menu, t("Route the next prompt"));
+    if (routeChoice) {
+      addMenuItem(menu, t("Clear route ({0})", routeChoice.label), function () {
+        setRoute(null);
+        if (routeChip) routeChip.classList.add("hidden");
+        closeMenu();
+      });
+    }
+    if (!models.length) {
+      addMenuItem(menu, t("Loading models…"), function () { closeMenu(); });
+      return;
+    }
+    var list = usableModels();
+    var byProv = {};
+    var order = [];
+    list.forEach(function (m) {
+      if (!m) return;
+      var p = m.provider != null ? String(m.provider) : "other";
+      if (!byProv[p]) { byProv[p] = []; order.push(p); }
+      byProv[p].push(m);
+    });
+    order.forEach(function (prov) {
+      addMenuLabel(menu, prov);
+      byProv[prov].forEach(function (m) {
+        var label = m.name != null ? m.name : (m.id != null ? m.id : "?");
+        var active = routeChoice && routeChoice.provider === m.provider && routeChoice.modelId === m.id;
+        addMenuItem(menu, (active ? "✓ " : "") + label, function () {
+          setRoute({ provider: m.provider, modelId: m.id, label: label });
+          armRouteChip();
+          closeMenu();
+        });
+      });
+    });
+    addMenuLabel(menu, t("applies to the next prompt only"));
+  }
+
+  if (routeChip) {
+    routeChip.addEventListener("click", function () {
+      if (!models.length) post({ t: "getModels" });
+      openMenu(routeChip, buildRouteMenu);
     });
   }
 
@@ -1696,65 +2722,302 @@
     });
   }
 
-  btnSettings.addEventListener("click", function () {
-    openMenu(btnSettings, function (menu) {
-      addMenuLabel(menu, "OMP Code");
-      addMenuItem(menu, t("New chat tab"), function () {
-        closeMenu();
-        post({ t: "openNewTab" });
-      });
-      addMenuItem(menu, t("Clear this session"), function () {
-        closeMenu();
-        post({ t: "newSession" });
-      });
-      addMenuItem(menu, t("Export transcript as Markdown"), function () {
-        closeMenu();
-        post({ t: "exportTranscript" });
-      });
-      addMenuItem(menu, t("Sign in with Claude (Pro/Max)"), function () {
-        closeMenu();
-        post({ t: "login", providerId: "anthropic" });
+  // Slash commands the panel answers by itself. They never reach the agent: the
+  // host runs a VS Code command instead, from a fixed allowlist. Hidden on
+  // Android, where the phone is already the far end of Remote Control and the
+  // desktop is the only place that may mint a pairing.
+  var localCommands = hostPort.kind === "android" ? [] : [
+    {
+      name: "remote",
+      description: t("Connect a phone — pick the scope, then scan the QR"),
+      menuLabel: t("Connect a phone…"),
+      run: "ompcode.remoteStart",
+    },
+    {
+      name: "remote-all",
+      description: t("Pair a phone with every chat in the project folders open right now"),
+      menuLabel: t("Connect a phone — all sessions"),
+      run: "ompcode.remoteStartAllSessions",
+    },
+    {
+      name: "remote-qr",
+      description: t("Mint a fresh pairing QR for the phone — same permissions, new code"),
+      menuLabel: t("Refresh the QR code…"),
+      run: "ompcode.remoteRefreshPairing",
+    },
+    {
+      name: "remote-status",
+      description: t("Show what the paired phone may do right now"),
+      menuLabel: t("Remote Control status"),
+      run: "ompcode.remoteStatus",
+    },
+    {
+      name: "remote-stop",
+      description: t("Stop Remote Control and revoke the phone"),
+      menuLabel: t("Stop Remote Control"),
+      run: "ompcode.remoteStop",
+    },
+  ];
+
+  function localCommandNamed(name) {
+    var wanted = String(name).replace(/^\//, "").toLowerCase();
+    for (var i = 0; i < localCommands.length; i++) {
+      if (localCommands[i].name.toLowerCase() === wanted) return localCommands[i];
+    }
+    return null;
+  }
+
+  function postLocalCommand(c) {
+    if (!c || !c.run) return;
+    post({ t: "runCommand", command: c.run });
+  }
+
+  /** Composer route: the typed command is consumed, so the draft goes with it. */
+  function runLocalCommand(c) {
+    if (!c || !c.run) return;
+    postLocalCommand(c);
+    input.value = "";
+    hideSlash();
+    autogrow();
+    input.focus();
+  }
+
+
+  /* ------------------------------------------------------------------ */
+  /* Settings screen                                                     */
+  /* ------------------------------------------------------------------ */
+
+  // The gear used to open a dropdown holding accounts, keys, models, Remote
+  // Control, five session actions and diagnostics. That is a settings window
+  // wearing a menu's clothes, so it is a window now: one full-screen surface,
+  // identical in VS Code and on the phone, built from the same registries.
+  var settingsScreen = null;
+
+  function settingsGroup(body, title) {
+    var section = document.createElement("section");
+    section.className = "settings-group";
+    var head = document.createElement("h2");
+    head.textContent = String(title);
+    section.appendChild(head);
+    body.appendChild(section);
+    return section;
+  }
+
+  /**
+   * One row: what it is on the left, the single thing it does on the right.
+   *
+   * Capability-gated exactly as the old menu was — a phone must never be shown a
+   * button the desktop grant would refuse, because a refusal after the tap reads
+   * as a bug rather than as a boundary.
+   */
+  function settingsRow(section, capability, label, hint, actionLabel, onClick) {
+    if (capability && !hasRemoteCapability(capability)) return null;
+    var row = document.createElement("div");
+    row.className = "settings-row";
+    var text = document.createElement("div");
+    text.className = "settings-row-text";
+    var name = document.createElement("div");
+    name.className = "settings-row-label";
+    name.textContent = String(label);
+    text.appendChild(name);
+    if (hint) {
+      var sub = document.createElement("div");
+      sub.className = "settings-row-hint";
+      sub.textContent = String(hint);
+      text.appendChild(sub);
+    }
+    row.appendChild(text);
+    var action = document.createElement("button");
+    action.type = "button";
+    action.className = "settings-action";
+    action.textContent = String(actionLabel);
+    action.addEventListener("click", onClick);
+    row.appendChild(action);
+    section.appendChild(row);
+    return row;
+  }
+
+  function buildSettingsBody(body) {
+    var accounts = settingsGroup(body, t("Accounts and keys"));
+    settingsRow(accounts, "credentials.manage", t("Claude Pro/Max"), t("Sign in with a subscription — no API key needed"), t("Sign in"), function () {
+      if (post({ t: "login", providerId: "anthropic" }) === false) return;
+      toast(t("Opening browser for sign-in…"), 5000);
+    });
+    settingsRow(accounts, "credentials.manage", t("Kimi Code"), t("Sign in with a Kimi Code subscription"), t("Sign in"), function () {
+      if (post({ t: "login", providerId: "kimi-code" }) === false) return;
+      toast(t("Opening browser for sign-in…"), 5000);
+    });
+    // Desktop only, and not an oversight. Z.AI answers on a loopback callback
+    // port and Qwen hands back a token to paste, so both need the browser on the
+    // machine running the agent; from a phone they are a dead end. The host
+    // refuses them over the remote link for the same reason.
+    if (hostPort.kind !== "android") {
+      settingsRow(accounts, "credentials.manage", t("GLM Coding Plan"), t("Sign in with Z.AI — the browser opens on this computer"), t("Sign in"), function () {
+        if (post({ t: "login", providerId: "zai-coding-plan" }) === false) return;
         toast(t("Opening browser for sign-in…"), 5000);
       });
-      addMenuItem(menu, t("Sign in with Kimi Code"), function () {
-        closeMenu();
-        post({ t: "login", providerId: "kimi-code" });
+      settingsRow(accounts, "credentials.manage", t("Qwen Portal"), t("Sign in with Qwen — the browser opens on this computer"), t("Sign in"), function () {
+        if (post({ t: "login", providerId: "qwen-portal" }) === false) return;
         toast(t("Opening browser for sign-in…"), 5000);
       });
-      addMenuItem(menu, t("API keys…"), function () {
-        closeMenu();
-        showSetupCard();
+      settingsRow(accounts, "credentials.manage", t("ChatGPT Plus/Pro"), t("Sign in with a Codex subscription — the browser opens on this computer"), t("Sign in"), function () {
+        if (post({ t: "login", providerId: "openai-codex" }) === false) return;
+        toast(t("Opening browser for sign-in…"), 5000);
       });
-      keyedProviders.forEach(function (p) {
-        if (!keyStatus[p.id]) return;
-        addMenuItem(menu, t("Remove stored {0} API key", p.label), function () {
-          closeMenu();
-          post({ t: "clearKey", which: p.id });
-          toast(t("{0} key removed — restarting agent", p.label), 4000);
-        });
-      });
-      addMenuItem(menu, t("Re-check which models work"), function () {
-        closeMenu();
-        post({ t: "recheckModels" });
-        toast(t("Checking which models answer…"), 4000);
-      });
-      addMenuItem(menu, t("Run diagnostics"), function () {
-        closeMenu();
-        post({ t: "diagnostics" });
-        toast(t("Running diagnostics…"), 4000);
-      });
-      addMenuItem(menu, t("Compact context"), function () {
-        post({ t: "compact" });
-        toast(t("Compacting context…"), 3000);
-        closeMenu();
-      });
-      addMenuItem(menu, t("Restart agent"), function () {
-        post({ t: "restart" });
-        toast(t("Restarting agent…"), 3000);
-        closeMenu();
+    }
+    settingsRow(accounts, "credentials.manage", t("API keys"), t("Stored in VS Code Secret Storage; the agent restarts after saving"), t("Edit"), function () {
+      // The key form is a modal card and modals render under this screen, so the
+      // screen steps aside rather than hiding the thing it just opened.
+      closeSettings();
+      showSetupCard();
+    });
+    keyedProviders.forEach(function (p) {
+      if (!keyStatus[p.id]) return;
+      settingsRow(accounts, "credentials.manage", t("Stored {0} API key", p.label), t("Removing it restarts the agent"), t("Remove"), function () {
+        post({ t: "clearKey", which: p.id });
+        toast(t("{0} key removed — restarting agent", p.label), 4000);
+        refreshSettingsBody();
       });
     });
-  });
+
+    var modelsGroup = settingsGroup(body, t("Models"));
+    settingsRow(modelsGroup, "prompt", t("Which models answer"), t("Ask every configured provider what it will actually serve"), t("Re-check"), function () {
+      if (post({ t: "recheckModels" }) === false) return;
+      toast(t("Checking which models answer…"), 4000);
+    });
+
+    // Same registry as the /remote slash commands, so a command cannot appear
+    // behind one door and not the other. Empty on Android, where the phone is
+    // already the far end and only the desktop may mint a pairing.
+    if (localCommands.length) {
+      var remoteGroup = settingsGroup(body, t("Remote Control"));
+      localCommands.forEach(function (command) {
+        settingsRow(remoteGroup, null, command.menuLabel, command.description, t("Open"), function () {
+          postLocalCommand(command);
+          closeSettings();
+        });
+      });
+    }
+
+    var chat = settingsGroup(body, t("This chat"));
+    settingsRow(chat, "session.manage", t("New chat tab"), t("A second agent, in its own tab"), t("Open"), function () {
+      post({ t: "openNewTab" });
+      closeSettings();
+    });
+    settingsRow(chat, "session.manage", t("Clear this session"), t("Forget the transcript and start the same agent over"), t("Clear"), function () {
+      post({ t: "newSession" });
+      closeSettings();
+    });
+    settingsRow(chat, "view", t("Export transcript"), t("Save the whole conversation as Markdown"), t("Export"), function () {
+      post({ t: "exportTranscript" });
+      closeSettings();
+    });
+    settingsRow(chat, "session.manage", t("Compact context"), t("Summarise the history so the agent keeps room to think"), t("Compact"), function () {
+      if (post({ t: "compact" }) === false) return;
+      toast(t("Compacting context…"), 3000);
+      closeSettings();
+    });
+    settingsRow(chat, "session.manage", t("Restart agent"), t("Restart the process; the transcript stays"), t("Restart"), function () {
+      if (post({ t: "restart" }) === false) return;
+      toast(t("Restarting agent…"), 3000);
+      closeSettings();
+    });
+
+    var diagnostics = settingsGroup(body, t("Diagnostics"));
+    settingsRow(diagnostics, "view", t("Run diagnostics"), t("Versions, paths and what the agent can reach"), t("Run"), function () {
+      post({ t: "diagnostics" });
+      toast(t("Running diagnostics…"), 4000);
+      closeSettings();
+    });
+
+    // A gate that removed every row would leave a heading over nothing.
+    Array.prototype.slice.call(body.querySelectorAll(".settings-group")).forEach(function (section) {
+      if (!section.querySelector(".settings-row")) section.remove();
+    });
+
+    if (hostPort.kind !== "android") {
+      var note = document.createElement("p");
+      note.className = "settings-note";
+      note.textContent = t("Everything else — palette, fonts, agent binary — lives in settings.json.");
+      body.appendChild(note);
+      var open = document.createElement("button");
+      open.type = "button";
+      open.className = "settings-action settings-note-action";
+      open.textContent = t("Open settings.json");
+      open.addEventListener("click", function () {
+        post({ t: "openProfileSettings" });
+        closeSettings();
+      });
+      body.appendChild(open);
+    }
+  }
+
+  /** Rebuild in place: removing a key changes which rows belong here. */
+  function refreshSettingsBody() {
+    if (!settingsScreen) return;
+    var body = settingsScreen.el.querySelector(".settings-body");
+    if (!body) return;
+    body.textContent = "";
+    buildSettingsBody(body);
+  }
+
+  function openSettings() {
+    if (settingsScreen) return;
+    closeMenu();
+    var el = document.createElement("div");
+    el.className = "settings-screen";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.setAttribute("aria-label", t("Settings"));
+
+    var head = document.createElement("header");
+    head.className = "settings-head";
+    var title = document.createElement("h1");
+    title.textContent = t("Settings");
+    head.appendChild(title);
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "settings-close";
+    close.setAttribute("aria-label", t("Close settings"));
+    close.textContent = "✕";
+    close.addEventListener("click", closeSettings);
+    head.appendChild(close);
+    el.appendChild(head);
+
+    var body = document.createElement("div");
+    body.className = "settings-body";
+    el.appendChild(body);
+    buildSettingsBody(body);
+
+    el.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        closeSettings();
+      }
+    });
+
+    document.body.appendChild(el);
+    settingsScreen = { el: el, previousFocus: document.activeElement };
+    // The native shell hides its drawer button and routes Back here while a modal
+    // owns the screen. A full-screen settings surface is exactly that.
+    notifyAndroidModalState(true);
+    setTimeout(function () { close.focus(); }, 0);
+  }
+
+  function closeSettings() {
+    if (!settingsScreen) return;
+    var previousFocus = settingsScreen.previousFocus;
+    settingsScreen.el.remove();
+    settingsScreen = null;
+    // An approval modal may already be waiting underneath; do not tell the shell
+    // the screen is free while something still owns it.
+    notifyAndroidModalState(Boolean(activeModal));
+    if (previousFocus && previousFocus.isConnected && typeof previousFocus.focus === "function") {
+      setTimeout(function () { previousFocus.focus(); }, 0);
+    }
+  }
+
+  btnSettings.addEventListener("click", openSettings);
 
   /* ------------------------------------------------------------------ */
   /* Slash command popup                                                 */
@@ -1785,9 +3048,10 @@
 
   function updateSlash() {
     var m = /^\/(\S*)$/.exec(input.value);
-    if (!m || !commands.length) { hideSlash(); return; }
+    var pool = localCommands.concat(commands);
+    if (!m || !pool.length) { hideSlash(); return; }
     var q = m[1].toLowerCase();
-    slashItems = commands.filter(function (c) {
+    slashItems = pool.filter(function (c) {
       return cmdName(c).toLowerCase().indexOf(q) !== -1;
     }).slice(0, 30);
     if (!slashItems.length) { hideSlash(); return; }
@@ -1805,6 +3069,14 @@
       name.className = "slash-name";
       name.textContent = "/" + cmdName(c);
       el.appendChild(name);
+      if (c.run) {
+        // A panel command opens VS Code UI instead of prompting the agent, so
+        // say so rather than letting it look like one more agent command.
+        var tag = document.createElement("span");
+        tag.className = "slash-tag";
+        tag.textContent = t("panel");
+        el.appendChild(tag);
+      }
       var desc = cmdDesc(c);
       if (desc) {
         var d = document.createElement("span");
@@ -1821,6 +3093,7 @@
   function pickSlash(i) {
     var c = slashItems[i];
     if (!c) return;
+    if (c.run) { runLocalCommand(c); return; }
     input.value = "/" + cmdName(c) + " ";
     hideSlash();
     input.focus();
@@ -1859,6 +3132,7 @@
   }
 
   function updateAt() {
+    if (hostPort.kind === "android") { hideAt(); return; }
     var hit = atQuery();
     if (!hit || !hit.query) { hideAt(); return; }
     clearTimeout(atDebounce);
@@ -1992,6 +3266,13 @@
       rm.setAttribute("aria-label", t("Remove {0}", att.name));
       rm.textContent = "✕";
       rm.addEventListener("click", function () {
+        var remoteAttachmentId = att.attachmentId ||
+          (typeof att.path === "string" && att.path.indexOf("remote:") === 0
+            ? att.path.slice("remote:".length)
+            : "");
+        if (remoteAttachmentId) {
+          post({ t: "cancelAttachment", attachmentId: remoteAttachmentId });
+        }
         attachments.splice(i, 1);
         renderAttachments();
       });
@@ -2153,19 +3434,32 @@
     var text = input.value.trim();
     var files = readyAttachments();
     if (!text && files.length === 0) return;
+    // Typed and sent without touching the popup, "/remote" still has to run the
+    // panel command rather than travel to the agent as a prompt it cannot serve.
+    var typedLocal = /^\/\S+$/.test(text) ? localCommandNamed(text) : null;
+    if (typedLocal && files.length === 0) { runLocalCommand(typedLocal); return; }
     if (attachments.length !== files.length) {
       toast(t("Still copying an attachment…"), 3000);
       return;
     }
-    post({ t: "prompt", text: text, attachments: files });
+    if (post({ t: "prompt", text: text, attachments: files, forModel: routeChoice ? { provider: routeChoice.provider, modelId: routeChoice.modelId } : undefined }) === false) return;
+    if (routeChoice) {
+      // One-shot: consumed by this send; the host restores the session model
+      // after the turn. The chip hides until armed again.
+      setRoute(null);
+      if (routeChip) routeChip.classList.add("hidden");
+    }
     if (text && promptHistory[promptHistory.length - 1] !== text) {
       promptHistory.push(text);
       if (promptHistory.length > 100) promptHistory.shift();
     }
     historyIdx = -1;
     historyDraft = "";
+    lastSentText = text;
+    lastSentFiles = files.length ? files : null;
+    // Sent while a turn was already running — omp queues it as a steer.
     pendingLocalUser++;
-    addUserBubble(text, files);
+    addUserBubble(text, files, { steer: working });
     input.value = "";
     attachments = [];
     renderAttachments();
@@ -2250,7 +3544,7 @@
       autogrow();
       return;
     }
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    if (hostPort.kind !== "android" && e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       sendPrompt();
     }
@@ -2270,13 +3564,44 @@
 
   btnNew.addEventListener("click", function () { post({ t: "openNewTab" }); });
   btnRestart.addEventListener("click", function () {
-    post({ t: "restart" });
+    if (post({ t: "restart" }) === false) return;
     procBanner.classList.add("hidden");
     toast(t("Restarting agent…"), 3000);
   });
 
+  // `.tool-revert` also carries `.tool-diff` styling. Classify the specific
+  // action first so the shared style class can never turn a revert into a diff.
+  function toolButtonMessage(target) {
+    var revertBtn = target.closest(".tool-revert");
+    if (revertBtn) {
+      return { t: "rejectEdit", toolCallId: revertBtn.getAttribute("data-id") };
+    }
+    var diffBtn = target.closest(".tool-diff");
+    if (diffBtn) {
+      return { t: "openDiff", toolCallId: diffBtn.getAttribute("data-id") };
+    }
+    return null;
+  }
+
   // Global Escape: modal > menu > slash popup > abort
   document.addEventListener("keydown", function (e) {
+    if (activeModal && e.key === "Tab") {
+      var focusable = Array.prototype.slice.call(activeModal.el.querySelectorAll(
+        "button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      ));
+      if (focusable.length) {
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+      return;
+    }
     if (e.key !== "Escape") return;
     if (activeModal) { cancelActiveModal(); return; }
     if (openMenuEl) { closeMenu(); return; }
@@ -2298,11 +3623,12 @@
     var th = target.closest(".thinking-head");
     if (th && th.parentElement) {
       th.parentElement.classList.toggle("collapsed");
+      th.setAttribute("aria-expanded", th.parentElement.classList.contains("collapsed") ? "false" : "true");
       return;
     }
-    var diffBtnEl = target.closest(".tool-diff");
-    if (diffBtnEl) {
-      post({ t: "openDiff", toolCallId: diffBtnEl.getAttribute("data-id") });
+    var toolButtonMsg = toolButtonMessage(target);
+    if (toolButtonMsg) {
+      post(toolButtonMsg);
       return;
     }
     var head = target.closest(".tool-head");
@@ -2340,6 +3666,23 @@
     }
   });
 
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var target = e.target;
+    if (!target || !target.closest) return;
+    var thinking = target.closest(".thinking-head");
+    if (thinking) {
+      e.preventDefault();
+      thinking.click();
+      return;
+    }
+    var tool = target.closest(".tool-head");
+    if (tool) {
+      e.preventDefault();
+      toggleTool(tool.closest(".tool-card"));
+    }
+  });
+
   /* ------------------------------------------------------------------ */
   /* State / models / commands rendering                                 */
   /* ------------------------------------------------------------------ */
@@ -2372,6 +3715,33 @@
     noteContextFill(contextPercent(state.contextUsage, model), autoCompaction);
 
     if (typeof state.isStreaming === "boolean") setWorking(state.isStreaming);
+    // omp counts the steer queue itself — no local bookkeeping to drift.
+    var queued = state.queuedMessageCount;
+    if (typeof queued === "number" && queued > 0) {
+      queueEl.textContent = t("queued: {0}", queued);
+      queueEl.classList.remove("hidden");
+    } else {
+      queueEl.textContent = "";
+      queueEl.classList.add("hidden");
+    }
+  }
+
+  function applyRemoteShellState(message) {
+    if (hostPort.kind !== "android" || !message || typeof message !== "object") return;
+    if (typeof message.title === "string" && message.title.trim()) {
+      remoteShellTitle = message.title.trim().slice(0, 256);
+      sessionTitle.textContent = remoteShellTitle;
+    }
+    if (!connectionStateEl) return;
+    var allowed = ["connected", "connecting", "reconnecting", "offline"];
+    var next = allowed.indexOf(message.connectionState) >= 0
+      ? message.connectionState
+      : "connecting";
+    connectionStateEl.setAttribute("data-state", next);
+    connectionStateEl.textContent = typeof message.connectionLabel === "string" && message.connectionLabel.trim()
+      ? message.connectionLabel.trim().slice(0, 160)
+      : (connectionStateEl.textContent || "Connecting securely…");
+    document.body.setAttribute("data-connection-state", next);
   }
 
   /* ------------------------------------------------------------------ */
@@ -2386,6 +3756,10 @@
     });
     welcomeEl.classList.remove("hidden");
     byToolCallId.clear();
+    // The orphan container is one of the children just removed above; drop the
+    // reference too, or the next spawn appends into a detached node.
+    subagentRows.clear();
+    subagentOrphansEl = null;
     currentAssistant = null;
     pendingLocalUser = 0;
     retryNotice = null;
@@ -2399,8 +3773,13 @@
     closeMenu();
     modalQueue = [];
     if (activeModal) { activeModal.el.remove(); activeModal = null; }
+    modalHolder.classList.remove("active");
+    notifyAndroidModalState(false);
     stuck = true;
-    sessionTitle.textContent = "OMP Code";
+    sessionTitle.textContent = remoteShellTitle || "OMP Code";
+    setRoute(null);
+    if (routeChip) routeChip.classList.add("hidden");
+    syncFragments.clear();
   }
 
   /* ------------------------------------------------------------------ */
@@ -2445,6 +3824,16 @@
         if (f.result != null) setToolBody(c3, resultText(f.result));
         break;
       }
+      case "subagent_lifecycle":
+        onSubagentLifecycle(f.payload);
+        break;
+      // Progress and events are rendered from the host's coalesced
+      // `t:"subagents"` snapshot instead — a single subagent emits dozens of
+      // these per second. The cases exist so they are recognised rather than
+      // falling through to the unknown-frame default.
+      case "subagent_progress":
+      case "subagent_event":
+        break;
       case "notice":
         addNotice(f.level, f.message);
         break;
@@ -2486,13 +3875,23 @@
   /* Host message bridge                                                 */
   /* ------------------------------------------------------------------ */
 
-  window.addEventListener("message", function (e) {
-    var m = e.data;
+  function handleHostMessage(m) {
     if (!m || typeof m !== "object") return;
     try {
       switch (m.t) {
         case "frame":
           handleFrame(m.frame);
+          break;
+        case "approvalResolved":
+          dropApprovalModal(m.requestId);
+          break;
+        case "subagents":
+          renderSubagents(m.snapshot);
+          break;
+        case "board":
+          // Only a chat tab is ever sent this; the sidebar view and the
+          // Android shell never receive it, so no column is ever built there.
+          renderProcs(m.snapshot, m.selfId);
           break;
         case "models":
           models = Array.isArray(m.models) ? m.models : [];
@@ -2503,11 +3902,29 @@
           }
           break;
         case "promptFailed":
-          setWorking(false);
+          // A steer that failed leaves the running turn untouched — killing
+          // the working line here would hide a live agent.
+          if (!m.steer) setWorking(false);
           if (pendingLocalUser > 0) pendingLocalUser--;
+          if (input.value === "" && lastSentText) {
+            input.value = lastSentText;
+            attachments = lastSentFiles ? lastSentFiles : [];
+            renderAttachments();
+            autogrow();
+          }
+          lastSentText = "";
+          lastSentFiles = null;
           break;
         case "state":
           applyState(m.state);
+          break;
+        case "remoteShellState":
+          applyRemoteShellState(m);
+          break;
+        case "androidBack":
+          if (settingsScreen) closeSettings();
+          else if (activeModal) cancelActiveModal();
+          else notifyAndroidModalState(false);
           break;
         case "commands":
           commands = Array.isArray(m.commands) ? m.commands : [];
@@ -2544,6 +3961,78 @@
         case "transcript":
           renderTranscript(Array.isArray(m.messages) ? m.messages : []);
           break;
+        case "transcriptReset":
+          enqueueSyncApply("transcriptReset", function () { resetView(); });
+          break;
+        case "transcriptAppend":
+          enqueueSyncApply("transcriptAppend", function () {
+            renderTranscript(Array.isArray(m.messages) ? m.messages : []);
+          });
+          break;
+        case "syncSection":
+          enqueueSyncApply("syncSection", function () {
+            applyRemoteSyncSection(m.section, m.value);
+          });
+          break;
+        case "transcriptMessageBegin":
+          beginSyncFragment("transcript", m);
+          break;
+        case "transcriptMessageChunk":
+          appendSyncFragment("transcript", m);
+          break;
+        case "transcriptMessageCommit":
+          enqueueSyncApply("transcriptMessageCommit", function () {
+            return commitSyncFragment("transcript", m);
+          });
+          break;
+        case "syncSectionBegin":
+          beginSyncFragment("section", m);
+          break;
+        case "syncSectionChunk":
+          appendSyncFragment("section", m);
+          break;
+        case "syncSectionCommit":
+          enqueueSyncApply("syncSectionCommit", function () {
+            return commitSyncFragment("section", m);
+          });
+          break;
+        case "commandResultBegin":
+          beginSyncFragment("result", m);
+          break;
+        case "commandResultChunk":
+          appendSyncFragment("result", m);
+          break;
+        case "commandResultCommit":
+          enqueueSyncApply("commandResultCommit", function () {
+            return commitSyncFragment("result", m);
+          });
+          break;
+        case "remoteCapabilities":
+          applyRemoteCapabilities(m);
+          break;
+        case "diffContent": {
+          var diffPath = typeof m.path === "string" ? m.path : t("Open diff (before ↔ current)");
+          var beforeText = typeof m.before === "string" ? m.before : "";
+          var currentText = typeof m.current === "string" ? m.current : "";
+          showRemoteTextResult(
+            diffPath,
+            t("Before") + "\n\n" + beforeText + "\n\n" + t("Current") + "\n\n" + currentText,
+          );
+          break;
+        }
+        case "exportReady":
+          if (typeof m.content === "string") {
+            post({
+              type: "local.share",
+              protocolVersion: 1,
+              text: m.content,
+              mime: "text/markdown",
+            });
+          }
+          break;
+        case "diagnosticsResult":
+          showRemoteTextResult(t("Run diagnostics"), typeof m.markdown === "string" ? m.markdown : "");
+          break;
         case "deadKey":
           showDeadKeyCard(m.which, m.label != null ? m.label : "provider");
           break;
@@ -2575,7 +4064,12 @@
           if (m.token) dropPending(m.token);
           var incoming = Array.isArray(m.files) ? m.files : [];
           incoming.forEach(function (f) {
-            if (f && f.path) addAttachment({ path: f.path, name: f.name || f.path, size: f.size });
+            if (f && f.path) addAttachment({
+              path: f.path,
+              attachmentId: f.attachmentId,
+              name: f.name || f.path,
+              size: f.size,
+            });
           });
           renderAttachments();
           var rejected = Array.isArray(m.rejected) ? m.rejected : [];
@@ -2648,11 +4142,31 @@
             diffBtn.textContent = "diff";
             diffBtn.title = t("Open diff (before ↔ current)");
             diffBtn.setAttribute("data-id", String(m.toolCallId));
+            var revertBtn = document.createElement("button");
+            revertBtn.className = "tool-diff tool-revert";
+            revertBtn.type = "button";
+            revertBtn.textContent = "revert";
+            revertBtn.title = t("Undo this edit (restore the file as it was before)");
+            revertBtn.setAttribute("data-id", String(m.toolCallId));
             var toggle = diffHead.querySelector(".tool-toggle");
             diffHead.insertBefore(diffBtn, toggle || null);
+            diffHead.insertBefore(revertBtn, toggle || null);
           }
           break;
         }
+        case "editRejected": {
+          var rejectedCard = byToolCallId.get(String(m.toolCallId));
+          var rejectedBtn = rejectedCard && rejectedCard.querySelector(".tool-revert");
+          if (rejectedBtn) {
+            rejectedBtn.textContent = t("reverted");
+            rejectedBtn.disabled = true;
+          }
+          break;
+        }
+        case "routedDone":
+          // The host restored the session model after a routed turn — the
+          // chip was already cleared on send; nothing to render.
+          break;
         case "approval":
           if (m.mode) setApprovalChip(String(m.mode));
           break;
@@ -2688,12 +4202,58 @@
       // render path once made every assistant reply vanish with no trace.
       reportUiError(err, m && m.t);
     }
-  });
+  }
+
+  hostPort.subscribe(handleHostMessage);
 
   /* ------------------------------------------------------------------ */
   /* Boot                                                                */
   /* ------------------------------------------------------------------ */
 
+  // The visual viewport is only worth pinning the layout to while the on-screen
+  // keyboard is eating the bottom of the screen. Every other reading it produces
+  // is either the layout viewport itself or, on a foldable mid-hinge, a stale
+  // fraction of it -- and pinning the app to that fraction squeezed the entire
+  // UI into a strip under the header. When the reading is not a believable
+  // keyboard inset, drop the property and let CSS use 100dvh.
+  var MIN_PLAUSIBLE_VIEWPORT_FRACTION = 0.4;
+
+  function syncAndroidViewport() {
+    if (hostPort.kind !== "android") return;
+    var root = document.documentElement;
+    var layout = window.innerHeight;
+    var viewport = window.visualViewport;
+    var height = viewport && Number.isFinite(viewport.height) ? viewport.height : layout;
+    // Android WebView resolves every viewport-height unit -- vh, dvh, svh, lvh --
+    // to zero while its layout height is unconstrained: measured 0px against a
+    // real 866px viewport on WebView 150, which collapsed #app to nothing and
+    // left the app a blank panel. Publish the layout viewport in pixels so the
+    // shell never has to trust those units; dvh stays only as a CSS fallback for
+    // hosts that report it honestly.
+    if (layout > 0) root.style.setProperty("--app-vh", Math.round(layout) + "px");
+    else root.style.removeProperty("--app-vh");
+    var believable = height > 0 && layout > 0 &&
+      height <= layout &&
+      height >= layout * MIN_PLAUSIBLE_VIEWPORT_FRACTION;
+    if (believable) root.style.setProperty("--app-viewport-height", Math.round(height) + "px");
+    else root.style.removeProperty("--app-viewport-height");
+  }
+
+  if (hostPort.kind === "android") {
+    syncAndroidViewport();
+    window.addEventListener("resize", syncAndroidViewport, { passive: true });
+    // A fold or unfold arrives as an orientation change on some devices and as a
+    // plain resize on others, and the first frame after it still carries the old
+    // metrics. Re-measure once the new layout has settled.
+    window.addEventListener("orientationchange", function () {
+      syncAndroidViewport();
+      setTimeout(syncAndroidViewport, 250);
+    }, { passive: true });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", syncAndroidViewport, { passive: true });
+      window.visualViewport.addEventListener("scroll", syncAndroidViewport, { passive: true });
+    }
+  }
   autogrow();
-  input.focus();
+  if (hostPort.kind !== "android") input.focus();
   post({ t: "ready" });

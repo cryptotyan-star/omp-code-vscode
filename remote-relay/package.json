@@ -1,0 +1,18 @@
+{
+  "name": "omp-code-remote-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Blind WebSocket relay for OMP Code Remote",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check relay.mjs && node --check server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

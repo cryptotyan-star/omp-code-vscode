@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as YAML from "yaml";
-import { syncCustomProviders } from "../src/modelsSync.ts";
+import { pruneCustomProvider, syncCustomProviders } from "../src/modelsSync.ts";
 
 // Point HOME at a temp dir so models.yml never touches the real user config.
 function withTempHome(fn) {
@@ -125,5 +125,68 @@ test("syncCustomProviders: rejects when root is not a mapping", async () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, "- just\n- a\n- list\n", "utf8");
     await assert.rejects(() => syncCustomProviders({ akemi: { baseUrl: "x" } }), /not a YAML mapping/i);
+  });
+});
+
+/**
+ * A shipped provider block is only valid while it carries an apiKey, and omp
+ * answers one invalid block by disabling every custom provider in the file.
+ * Clearing the key therefore has to take the block with it — but only the
+ * block this extension wrote.
+ */
+test("pruneCustomProvider: removes the block it owns, leaves the rest", async () => {
+  await withTempHome(async (home) => {
+    const file = path.join(home, ".omp", "agent", "models.yml");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      "providers:\n  keepme:\n    baseUrl: http://h:8000/v1\n  bigmodel:\n    baseUrl: https://open.bigmodel.cn/api/paas/v4\n    apiKey: secret\n",
+      "utf8",
+    );
+
+    assert.equal(await pruneCustomProvider("bigmodel", "https://open.bigmodel.cn/api/paas/v4"), true);
+    const doc = YAML.parse(await fs.readFile(file, "utf8"));
+    assert.equal(doc.providers.bigmodel, undefined, "the owned block is gone");
+    assert.equal(doc.providers.keepme.baseUrl, "http://h:8000/v1", "the neighbour survives");
+    assert.doesNotMatch(await fs.readFile(file, "utf8"), /secret/, "and takes the key with it");
+  });
+});
+
+test("pruneCustomProvider: a same-named block pointing elsewhere is not ours to delete", async () => {
+  await withTempHome(async (home) => {
+    const file = path.join(home, ".omp", "agent", "models.yml");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "providers:\n  bigmodel:\n    baseUrl: http://mine.local/v1\n", "utf8");
+
+    assert.equal(await pruneCustomProvider("bigmodel", "https://open.bigmodel.cn/api/paas/v4"), false);
+    const doc = YAML.parse(await fs.readFile(file, "utf8"));
+    assert.equal(doc.providers.bigmodel.baseUrl, "http://mine.local/v1", "hand-written entry kept");
+  });
+});
+
+test("pruneCustomProvider: missing file, empty file and absent block are all no-ops", async () => {
+  await withTempHome(async (home) => {
+    const file = path.join(home, ".omp", "agent", "models.yml");
+    assert.equal(await pruneCustomProvider("bigmodel", "https://open.bigmodel.cn/api/paas/v4"), false);
+
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "", "utf8");
+    assert.equal(await pruneCustomProvider("bigmodel", "https://open.bigmodel.cn/api/paas/v4"), false);
+
+    await fs.writeFile(file, "providers:\n  other:\n    baseUrl: x\n", "utf8");
+    assert.equal(await pruneCustomProvider("bigmodel", "https://open.bigmodel.cn/api/paas/v4"), false);
+    assert.equal(YAML.parse(await fs.readFile(file, "utf8")).providers.other.baseUrl, "x");
+  });
+});
+
+test("pruneCustomProvider: refuses to rewrite invalid YAML", async () => {
+  await withTempHome(async (home) => {
+    const file = path.join(home, ".omp", "agent", "models.yml");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "providers:\n  bigmodel:\n   - [unclosed\n", "utf8");
+    await assert.rejects(
+      () => pruneCustomProvider("bigmodel", "https://open.bigmodel.cn/api/paas/v4"),
+      /invalid YAML/i,
+    );
   });
 });

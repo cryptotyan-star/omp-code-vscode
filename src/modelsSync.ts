@@ -83,3 +83,52 @@ export async function syncCustomProviders(
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, doc.toString(), "utf8");
 }
+
+/**
+ * Remove `providers.<name>` from `~/.omp/agent/models.yml`.
+ *
+ * The counterpart to writing a shipped provider block (CONFIG_PROVIDERS): the
+ * block is only valid while it carries an apiKey, and omp answers one invalid
+ * block by disabling every custom provider in the file. So a cleared key has
+ * to take its block with it.
+ *
+ * `ownedBaseUrl` is the guard against deleting someone else's work: a
+ * hand-written provider that happens to share the name keeps its place.
+ * Returns whether the file was rewritten.
+ */
+export async function pruneCustomProvider(
+  name: string,
+  ownedBaseUrl: string,
+): Promise<boolean> {
+  const file = modelsYmlPath();
+
+  let text: string;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false; // nothing written yet — nothing to take back
+    }
+    throw err;
+  }
+  if (text.trim() === "") {
+    return false;
+  }
+
+  const doc = YAML.parseDocument(text);
+  if (doc.errors.length > 0) {
+    throw new Error(`models.yml is invalid YAML — refusing to overwrite: ${doc.errors[0].message}`);
+  }
+  const root: unknown = doc.toJSON();
+  if (!isPlainObject(root) || !isPlainObject(root.providers)) {
+    return false;
+  }
+  const existing = root.providers[name];
+  if (!isPlainObject(existing) || existing.baseUrl !== ownedBaseUrl) {
+    return false;
+  }
+
+  doc.deleteIn(["providers", name]);
+  await fs.writeFile(file, doc.toString(), "utf8");
+  return true;
+}

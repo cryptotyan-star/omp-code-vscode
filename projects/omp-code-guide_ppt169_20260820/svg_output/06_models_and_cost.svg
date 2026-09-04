@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Golos Text, Arial, Helvetica Neue, sans-serif">
+  <rect id="page-bg" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+
+  <g id="page-header" data-pptx-bounds="64 56 1152 100">
+    <text x="64" y="76" font-size="15" font-weight="bold" letter-spacing="2" fill="#6F5CE8">КАК ПОЛЬЗОВАТЬСЯ · МОДЕЛИ</text>
+    <text x="64" y="124" font-size="38" font-weight="bold" fill="#2A2440">Переключайте модель и следите за счётом</text>
+    <line x1="64" y1="150" x2="1216" y2="150" stroke="#DDD8EE" stroke-width="1"/>
+  </g>
+
+  <g id="cost-disclaimer" data-pptx-bounds="64 160 1152 30">
+    <text x="64" y="178" font-size="15" fill="#6B667E">Расширение не делает токены дешевле — оно делает трату видимой.</text>
+  </g>
+
+  <g id="fact-models" data-pptx-bounds="64 193 520 76">
+    <text x="64" y="214" font-size="20" font-weight="bold" fill="#2A2440">Одна панель, любая модель</text>
+    <text x="64" y="238" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">Claude, GLM, Qwen, Kimi и кастомные OpenAI-совместимые</tspan><tspan x="64" dy="21">провайдеры в одном списке. Переключение посреди диалога.</tspan></text>
+  </g>
+
+  <g id="fact-cost" data-pptx-bounds="64 271 520 87">
+    <line x1="64" y1="275" x2="584" y2="275" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="303" font-size="20" font-weight="bold" fill="#2A2440">Стоимость на виду</text>
+    <text x="64" y="327" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">В подвале композера — токены на вход, на выход и доллары</tspan><tspan x="64" dy="21">за сессию. На наведении: рассуждения и чтение кэша.</tspan></text>
+  </g>
+
+  <g id="fact-thinking" data-pptx-bounds="64 360 520 87">
+    <line x1="64" y1="364" x2="584" y2="364" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="392" font-size="20" font-weight="bold" fill="#2A2440">Рассуждения — тоже выход</text>
+    <text x="64" y="416" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">Чип think: задаёт уровень на сессию. Значение auto отдаёт</tspan><tspan x="64" dy="21">решение агенту omp: он оценивает каждый запрос отдельно.</tspan></text>
+  </g>
+
+  <g id="fact-context" data-pptx-bounds="64 449 520 87">
+    <line x1="64" y1="453" x2="584" y2="453" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="481" font-size="20" font-weight="bold" fill="#2A2440">Контекст не разносит незаметно</text>
+    <text x="64" y="505" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">На 50%, 75% и 90% заполнения панель предупреждает и</tspan><tspan x="64" dy="21">предлагает сжать контекст в один клик.</tspan></text>
+  </g>
+
+  <g id="fact-verify" data-pptx-bounds="64 538 520 87">
+    <line x1="64" y1="542" x2="584" y2="542" stroke="#DDD8EE" stroke-width="1"/>
+    <text x="64" y="570" font-size="20" font-weight="bold" fill="#2A2440">Короткий список — это проверка</text>
+    <text x="64" y="594" font-size="15" fill="#1D1B26"><tspan x="64" dy="0">ompcode.verifyModels шлёт каждой модели один пробный запрос</tspan><tspan x="64" dy="21">и прячет нерабочие. Вердикты кэшируются на 12 часов.</tspan></text>
+  </g>
+
+  <g id="stage-models" data-pptx-bounds="624 172 592 492">
+    <rect x="624" y="176" width="592" height="484" fill="#16141F"/>
+    <image href="../images/models.png" x="654" y="212" width="247" height="388" preserveAspectRatio="xMidYMid meet"/>
+    <image href="../images/context-warning.png" x="938" y="212" width="247" height="388" preserveAspectRatio="xMidYMid meet"/>
+    <text x="778" y="630" font-size="15" fill="#6B667E" text-anchor="middle">Выбор модели по провайдерам</text>
+    <text x="1062" y="630" font-size="15" fill="#6B667E" text-anchor="middle">Предупреждение о контексте</text>
+  </g>
+
+  <g id="page-footer" data-pptx-bounds="64 668 1152 32">
+    <text x="64" y="688" font-size="15" fill="#6B667E">Как пользоваться</text>
+    <text x="1216" y="688" font-size="15" fill="#6B667E" text-anchor="end">06</text>
+  </g>
+</svg>

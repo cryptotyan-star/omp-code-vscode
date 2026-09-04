@@ -1,0 +1,18 @@
+<resources>
+    <!-- Deliberately no android:fontFamily here. Golos is applied by Compose
+         (ui/OmpTheme.kt), which is the entire UI; putting a font *resource* on the
+         platform theme only exposes it to whatever framework views an OEM inflates.
+
+         Light half of a DayNight pair. The night variant lives in values-night.
+         The split matters beyond colour: a WebView reads `prefers-color-scheme`
+         from the Activity theme, so a hard-Light theme kept the embedded
+         renderer in daylight while the app chrome around it was already dark. -->
+    <style name="Theme.OmpRemote" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <!-- Bars are painted by the edge-to-edge controller, not by the theme. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
